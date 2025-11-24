@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Painel TV - ClinicaSys</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-color: #121212;
+        --card-bg: #1e1e1e;
+        --highlight: #00e676;
+        --text-main: #ffffff;
+        --text-muted: #b0b0b0;
+        --accent: #2979ff;
+        --error: #ff1744;
+        --warning: #ffd600;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background-color: var(--bg-color);
+        color: var(--text-main);
+        font-family: "Roboto", sans-serif;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 80px 1fr 80px;
+        overflow: hidden;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 40px;
+        background: linear-gradient(to bottom, #1a1a1a, #121212);
+        border-bottom: 2px solid var(--highlight);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      }
+
+      .brand h1 {
+        font-size: 1.8rem;
+        font-weight: 900;
+        letter-spacing: 2px;
+        color: var(--highlight);
+        text-transform: uppercase;
+      }
+
+      .header-center {
+        flex: 1;
+        text-align: center;
+      }
+
+      .clinic-name {
+        font-size: 1.2rem;
+        color: var(--text-main);
+        font-weight: 600;
+      }
+
+      .clock {
+        font-size: 2.2rem;
+        font-weight: 300;
+        color: var(--highlight);
+        min-width: 150px;
+        text-align: right;
+        letter-spacing: 2px;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: 65% 35%;
+        height: 100%;
+        gap: 1px;
+        background: #222;
+      }
+
+      .call-panel {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 40px;
+        text-align: center;
+        position: relative;
+        background: linear-gradient(135deg, #1a1a1a 0%, #0d0d0d 100%);
+      }
+
+      .call-label {
+        font-size: 2.5rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 5px;
+        margin-bottom: 20px;
+        font-weight: 300;
+      }
+
+      .call-name {
+        font-size: 6vw;
+        font-weight: 900;
+        line-height: 1.1;
+        color: #fff;
+        margin-bottom: 50px;
+        text-shadow: 0 0 30px rgba(0, 230, 118, 0.4);
+        word-wrap: break-word;
+      }
+
+      .call-info-box {
+        background: var(--card-bg);
+        padding: 25px 60px;
+        border-radius: 100px;
+        border: 3px solid var(--highlight);
+        display: flex;
+        align-items: center;
+        gap: 30px;
+        box-shadow: 0 10px 40px rgba(0, 230, 118, 0.2);
+        backdrop-filter: blur(10px);
+      }
+
+      .call-room {
+        font-size: 3.5rem;
+        font-weight: 900;
+        color: var(--highlight);
+        text-shadow: 0 0 20px rgba(0, 230, 118, 0.5);
+      }
+
+      .call-doc {
+        font-size: 1.6rem;
+        color: var(--text-muted);
+        padding-left: 25px;
+        border-left: 3px solid var(--accent);
+        font-weight: 500;
+      }
+
+      .call-waiting {
+        margin-top: 40px;
+        font-size: 1.4rem;
+        color: var(--warning);
+        font-weight: 600;
+        animation: blink 1s infinite;
+      }
+
+      @keyframes blink {
+        0%,
+        50% {
+          opacity: 1;
+        }
+        51%,
+        100% {
+          opacity: 0.3;
+        }
+      }
+
+      .history-panel {
+        background: linear-gradient(135deg, #181818 0%, #0a0a0a 100%);
+        padding: 30px;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid #333;
+      }
+
+      .history-title {
+        font-size: 1.3rem;
+        text-transform: uppercase;
+        color: var(--highlight);
+        margin-bottom: 20px;
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 12px;
+        font-weight: 700;
+        letter-spacing: 1px;
+      }
+
+      .history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .history-list::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .history-list::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .history-list::-webkit-scrollbar-thumb {
+        background: var(--accent);
+        border-radius: 3px;
+      }
+
+      .h-card {
+        background: linear-gradient(135deg, var(--card-bg) 0%, #262626 100%);
+        padding: 16px;
+        border-radius: 8px;
+        border-left: 5px solid var(--text-muted);
+        opacity: 0.6;
+        transition: all 0.3s;
+        cursor: pointer;
+      }
+
+      .h-card:hover {
+        opacity: 0.8;
+        transform: translateX(5px);
+      }
+
+      .h-card.recent {
+        opacity: 1;
+        border-left-color: var(--highlight);
+        box-shadow: 0 0 15px rgba(0, 230, 118, 0.2);
+        background: linear-gradient(135deg, #1a3a2a 0%, #0f2818 100%);
+      }
+
+      .h-name {
+        font-size: 1.2rem;
+        font-weight: 700;
+        margin-bottom: 6px;
+        color: var(--text-main);
+      }
+
+      .h-meta {
+        font-size: 0.9rem;
+        color: var(--text-muted);
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .h-status {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--highlight);
+        margin-top: 6px;
+      }
+
+      footer {
+        background: linear-gradient(to right, var(--highlight), #00c853);
+        color: #000;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 40px;
+        overflow: hidden;
+        box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.3);
+      }
+
+      .status-info {
+        display: flex;
+        gap: 30px;
+        min-width: 300px;
+      }
+
+      .status-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 1.1rem;
+      }
+
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #000;
+        animation: pulse-status 2s infinite;
+      }
+
+      .status-dot.online {
+        background: #00e676;
+      }
+
+      @keyframes pulse-status {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+
+      .ticker-wrap {
+        flex: 1;
+        overflow: hidden;
+        margin: 0 20px;
+      }
+
+      .ticker {
+        display: inline-block;
+        padding-left: 100%;
+        animation: ticker 40s linear infinite;
+        font-weight: 700;
+        font-size: 1.1rem;
+        white-space: nowrap;
+      }
+
+      @keyframes ticker {
+        0% {
+          transform: translate3d(0, 0, 0);
+        }
+        100% {
+          transform: translate3d(-100%, 0, 0);
+        }
+      }
+
+      .time-display {
+        font-weight: 800;
+        font-size: 1.3rem;
+        min-width: 120px;
+        text-align: right;
+      }
+
+      @keyframes pulse-green {
+        0% {
+          box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.7);
+          border-color: #fff;
+        }
+        70% {
+          box-shadow: 0 0 0 60px rgba(0, 230, 118, 0);
+          border-color: var(--highlight);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(0, 230, 118, 0);
+          border-color: var(--highlight);
+        }
+      }
+
+      .calling-animation .call-info-box {
+        animation: pulse-green 1.5s infinite;
+      }
+
+      .calling-animation .call-name {
+        animation: glow 1s infinite alternate;
+      }
+
+      @keyframes glow {
+        from {
+          text-shadow: 0 0 20px rgba(0, 230, 118, 0.4);
+        }
+        to {
+          text-shadow: 0 0 40px rgba(0, 230, 118, 0.8);
+        }
+      }
+
+      @media (max-width: 1200px) {
+        .content-grid {
+          grid-template-columns: 60% 40%;
+        }
+        .call-name {
+          font-size: 5vw;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .content-grid {
+          grid-template-columns: 1fr;
+        }
+        .history-panel {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand"><h1>🏥 ClinicaSys</h1></div>
+      <div class="header-center">
+        <div class="clinic-name" id="clinic-name">Carregando...</div>
+      </div>
+      <div class="clock" id="clock">00:00</div>
+    </header>
+
+    <div class="content-grid">
+      <div class="call-panel" id="painel-destaque">
+        <div class="call-label">📢 Chamada Atual</div>
+        <div class="call-name" id="txt-nome">Aguardando...</div>
+
+        <div class="call-info-box">
+          <div class="call-room" id="txt-sala">---</div>
+          <div class="call-doc" id="txt-prof">---</div>
+        </div>
+
+        <div class="call-waiting" id="waiting-status"></div>
+      </div>
+
+      <div class="history-panel">
+        <div class="history-title">📋 Últimas Chamadas</div>
+        <div class="history-list" id="lista-historico"></div>
+      </div>
+    </div>
+
+    <footer>
+      <div class="status-info">
+        <div class="status-item">
+          <div class="status-dot online"></div>
+          <span id="status-text">ONLINE</span>
+        </div>
+        <div class="status-item" id="queue-info">
+          <span>Fila: <span id="queue-count">0</span></span>
+        </div>
+      </div>
+
+      <div class="ticker-wrap">
+        <div class="ticker">
+          ✅ Bem-vindo à nossa clínica! • Favor manter o silêncio • 📡 Para
+          Wi-Fi solicite a senha na recepção • Aceitamos Convênios e Particular
+          • 💚 Cuide da sua saúde! • Obrigado por sua confiança!
+        </div>
+      </div>
+
+      <div class="time-display" id="footer-time">00:00</div>
+    </footer>
+
+    <script>
+      // --- MUDANÇA PRINCIPAL: Usamos Timestamp (Data/Hora) e não ID ---
+      let ultimoTimestampChamada = "";
+      let tempoEspera = 0;
+      let clinicName = "ClinicaSys";
+
+      const audio = new Audio(
+        "https://www.soundjay.com/transportation/sounds/train-station-announcement-1.mp3"
+        
+      );
+
+      function updateClock() {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString("pt-BR", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        document.getElementById("clock").innerText = timeStr;
+        document.getElementById("footer-time").innerText = timeStr;
+      }
+
+      setInterval(updateClock, 1000);
+      updateClock();
+
+      async function carregarConfig() {
+        try {
+          const res = await fetch("/api/config/publico");
+          if (res.ok) {
+            const config = await res.json();
+            if (config.nome_clinica) {
+              clinicName = config.nome_clinica;
+              document.getElementById("clinic-name").innerText = clinicName;
+            }
+          }
+        } catch (e) {
+          console.log("Não foi possível carregar configurações:", e);
+        }
+      }
+
+      async function buscarDados() {
+        try {
+          const req = await fetch("/api/sala_espera?t=" + new Date().getTime());
+
+          if (!req.ok) {
+            document.getElementById("status-text").innerText = "⚠️ OFFLINE";
+            return;
+          }
+
+          const lista = await req.json();
+          document.getElementById("status-text").innerText = "✅ ONLINE";
+
+          if (!lista) return;
+
+          // 1. Separa quem está "Em Atendimento"
+          let chamados = lista.filter((p) => p.status === "Em Atendimento");
+
+          // 2. ORDENAÇÃO CRUCIAL: O mais recente (data_chamada maior) fica em PRIMEIRO [0]
+          // Isso garante que se clicarmos em alguém, ele sobe para o topo da lista
+          chamados.sort((a, b) => {
+            if (!a.data_chamada) return 1;
+            if (!b.data_chamada) return -1;
+            // Compara strings ISO (ex: '2023-10-27 10:00:05' vs '2023-10-27 10:00:00')
+            // b.localeCompare(a) faz ordem decrescente (mais novo primeiro)
+            return b.data_chamada.localeCompare(a.data_chamada);
+          });
+
+          // Fila normal
+          const fila = lista.filter(
+            (p) => p.status === "Em Espera" || p.status === "Agendado"
+          );
+          document.getElementById("queue-count").innerText = fila.length;
+
+          // 3. Lógica de Exibição
+          if (chamados.length > 0) {
+            const atual = chamados[0]; // Pega o PRIMEIRO (o mais recente clicado)
+            atualizarTelaPrincipal(atual);
+
+            // VERIFICA SE HOUVE NOVA CHAMADA (Timestamp diferente)
+            // Se for o mesmo paciente, mas com novo clique, o timestamp mudou -> Toca som
+            if (atual.data_chamada !== ultimoTimestampChamada) {
+              ultimoTimestampChamada = atual.data_chamada;
+              tempoEspera = 0;
+              tocarAlerta(atual);
+            } else {
+              // Apenas conta o tempo se for a mesma chamada antiga
+              tempoEspera++;
+              if (tempoEspera > 0 && tempoEspera % 60 === 0) {
+                document.getElementById(
+                  "waiting-status"
+                ).innerText = `⏱ Aguardando há ${Math.floor(
+                  tempoEspera / 60
+                )} minuto(s)`;
+              }
+            }
+          } else {
+            // Ninguém sendo chamado
+            document
+              .getElementById("painel-destaque")
+              .classList.remove("calling-animation");
+            document.getElementById("waiting-status").innerText = "";
+            document.getElementById("txt-nome").innerText = "Aguardando...";
+            document.getElementById("txt-sala").innerText = "---";
+            document.getElementById("txt-prof").innerText = "---";
+          }
+
+          // 4. Histórico: Pega os chamados, excluindo o atual (index 0)
+          // Mostra do index 1 ao 6 (os 6 anteriores)
+          const historico = chamados.slice(1, 7);
+          renderizarHistorico(historico);
+        } catch (e) {
+          console.error("Erro no loop da TV:", e);
+          document.getElementById("status-text").innerText = "❌ ERRO";
+        }
+      }
+
+      function atualizarTelaPrincipal(p) {
+        document.getElementById("txt-nome").innerText = p.paciente_nome;
+        document.getElementById("txt-sala").innerText =
+          p.sala_nome || "Consultório";
+
+        let medico = p.profissional_nome
+          ? p.profissional_nome.split(" ")[0]
+          : "";
+        if (p.profissional_nome && p.profissional_nome.includes("Dr"))
+          medico = p.profissional_nome;
+
+        document.getElementById("txt-prof").innerText = "👨‍⚕️ " + medico;
+      }
+
+      function renderizarHistorico(lista) {
+        const container = document.getElementById("lista-historico");
+
+        // Se histórico vazio e ninguém na tela principal, não faz nada
+        if (
+          lista.length === 0 &&
+          document.getElementById("txt-nome").innerText.includes("Aguardando")
+        ) {
+          return;
+        }
+
+        container.innerHTML = lista
+          .map(
+            (p, index) => `
+                <div class="h-card ${index === 0 ? "recent" : ""}">
+                    <div class="h-name">👤 ${p.paciente_nome}</div>
+                    <div class="h-meta">
+                        <span>🚪 ${p.sala_nome || "Consultório"}</span>
+                        <span>🕐 ${p.data_hora_inicio.substring(11, 16)}</span>
+                    </div>
+                    <div class="h-status">${p.status}</div>
+                </div>
+            `
+          )
+          .join("");
+      }
+
+      function tocarAlerta(p) {
+        const painel = document.getElementById("painel-destaque");
+
+        // Reinicia animação
+        painel.classList.remove("calling-animation");
+        void painel.offsetWidth; // Trigger reflow
+        painel.classList.add("calling-animation");
+
+        audio.currentTime = 0;
+        audio.play().catch((e) => {
+          console.log("Som bloqueado pelo navegador (política de autoplay)");
+        });
+
+        setTimeout(() => {
+          const sala = p.sala_nome || "Consultório";
+          const texto = `Atenção, paciente ${p.paciente_nome}. Comparecer ao ${sala}.`;
+
+          const msg = new SpeechSynthesisUtterance(texto);
+          msg.lang = "pt-BR";
+          msg.rate = 0.85;
+          msg.volume = 1.0;
+          msg.pitch = 1.0;
+
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(msg);
+        }, 1500);
+      }
+
+      // Inicialização
+      carregarConfig();
+      buscarDados();
+
+      // Atualiza a cada 3 segundos para ser bem responsivo
+      setInterval(buscarDados, 3000);
+
+      // Recarrega config a cada 5 minutos
+      setInterval(carregarConfig, 300000);
+    </script>
+  </body>
+</html>
