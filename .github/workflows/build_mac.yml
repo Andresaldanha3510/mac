@@ -18,13 +18,12 @@ jobs:
 
     - name: Instalar Dependencias
       run: |
-        # Adicionamos flask-cors, flask-login e ordered-set que faltavam
         pip install flask flask-cors flask-login pywebview nuitka pyobjc-core pyobjc-framework-Cocoa ordered-set
 
     - name: Compilar com Nuitka
       run: |
-        # Adicionei --assume-yes-for-downloads para ele não travar pedindo confirmação
-        python -m nuitka --standalone --macos-create-app-bundle --assume-yes-for-downloads --enable-plugin=flask --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
+        # REMOVIDO: --enable-plugin=flask (não existe mais e não é necessário)
+        python -m nuitka --standalone --macos-create-app-bundle --assume-yes-for-downloads --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
 
     - name: Compactar o App
       run: |
