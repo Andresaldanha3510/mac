@@ -34,5 +34,3 @@ jobs:
       with:
         name: ClinicaSys-Mac-Build
         path: backend.dist/ClinicaSysMac.zip
-        path: backend.dist/ClinicaSysMac.zip
-
