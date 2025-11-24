@@ -1,0 +1,36 @@
+name: Build Mac App
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Instalar Dependencias
+      run: |
+        pip install flask pywebview nuitka pyobjc-core pyobjc-framework-Cocoa
+
+    - name: Compilar com Nuitka
+      run: |
+        python -m nuitka --standalone --macos-create-app-bundle --enable-plugin=flask --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
+
+    - name: Compactar o App
+      run: |
+        cd backend.dist
+        zip -r ClinicaSysMac.zip backend.app
+
+    - name: Upload do Arquivo Final
+      uses: actions/upload-artifact@v3
+      with:
+        name: ClinicaSys-Mac-Build
+        path: backend.dist/ClinicaSysMac.zip
