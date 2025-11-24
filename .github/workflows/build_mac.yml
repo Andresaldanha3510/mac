@@ -6,8 +6,7 @@ on:
 
 jobs:
   build:
-    # MUDANÇA AQUI: Usamos 'macos-13' para forçar processador Intel (x86_64)
-    # Isso garante compatibilidade com TODOS os Macs (velhos e novos).
+    # Mantemos macos-13 para garantir compatibilidade com Intel e M1/M2
     runs-on: macos-13
 
     steps:
@@ -16,15 +15,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.10"
+        # MUDANÇA 1: Usamos Python 3.11 que corrige o problema de links quebrados
+        python-version: "3.11"
 
     - name: Instalar Dependencias
       run: |
+        # MUDANÇA 2: Forçamos a reinstalação do OpenSSL para corrigir o arquivo que faltava
+        brew install openssl@3
         pip install flask flask-cors flask-login pywebview nuitka pyobjc-core pyobjc-framework-Cocoa ordered-set
 
     - name: Compilar com Nuitka
       run: |
-        # O Nuitka vai gerar o backend.app na raiz
         python -m nuitka --standalone --macos-create-app-bundle --assume-yes-for-downloads --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
 
     - name: Listar arquivos (Debug)
@@ -32,7 +33,6 @@ jobs:
 
     - name: Compactar o App
       run: |
-        # Zipamos o app gerado
         zip -r ClinicaSysMac_Intel.zip backend.app
 
     - name: Upload do Arquivo Final
