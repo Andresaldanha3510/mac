@@ -22,16 +22,19 @@ jobs:
 
     - name: Compilar com Nuitka
       run: |
-        # REMOVIDO: --enable-plugin=flask (não existe mais e não é necessário)
+        # Aqui ele LE o backend.py e CRIA o backend.app
         python -m nuitka --standalone --macos-create-app-bundle --assume-yes-for-downloads --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
+
+    - name: Listar arquivos (Para conferência no log)
+      run: ls -la
 
     - name: Compactar o App
       run: |
-        cd backend.dist
+        # Aqui ele pega o backend.app (o programa gerado) e guarda no zip
         zip -r ClinicaSysMac.zip backend.app
 
     - name: Upload do Arquivo Final
       uses: actions/upload-artifact@v4
       with:
         name: ClinicaSys-Mac-Build
-        path: backend.dist/ClinicaSysMac.zip
+        path: ClinicaSysMac.zip
