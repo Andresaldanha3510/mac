@@ -6,7 +6,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    # MUDANÇA AQUI: Usamos 'macos-13' para forçar processador Intel (x86_64)
+    # Isso garante compatibilidade com TODOS os Macs (velhos e novos).
+    runs-on: macos-13
 
     steps:
     - uses: actions/checkout@v4
@@ -22,19 +24,19 @@ jobs:
 
     - name: Compilar com Nuitka
       run: |
-        # Aqui ele LE o backend.py e CRIA o backend.app
+        # O Nuitka vai gerar o backend.app na raiz
         python -m nuitka --standalone --macos-create-app-bundle --assume-yes-for-downloads --include-data-file=sistema.html=sistema.html --include-data-file=tv.html=tv.html backend.py
 
-    - name: Listar arquivos (Para conferência no log)
+    - name: Listar arquivos (Debug)
       run: ls -la
 
     - name: Compactar o App
       run: |
-        # Aqui ele pega o backend.app (o programa gerado) e guarda no zip
-        zip -r ClinicaSysMac.zip backend.app
+        # Zipamos o app gerado
+        zip -r ClinicaSysMac_Intel.zip backend.app
 
     - name: Upload do Arquivo Final
       uses: actions/upload-artifact@v4
       with:
-        name: ClinicaSys-Mac-Build
-        path: ClinicaSysMac.zip
+        name: ClinicaSys-Mac-Intel
+        path: ClinicaSysMac_Intel.zip
