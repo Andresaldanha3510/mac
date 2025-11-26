@@ -191,8 +191,9 @@ class Database:
             print("Aviso: Não foi possível ativar otimizações SQLite:", e)
 
         # Criação das tabelas
+        # NOTA: Adicionei permissoes TEXT aqui no CREATE para instalações novas
         c.execute(
-            "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT)"
+            "CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT, permissoes TEXT)"
         )
         c.execute(
             "CREATE TABLE IF NOT EXISTS configuracoes (id INTEGER PRIMARY KEY, nome_clinica TEXT, endereco TEXT, telefone TEXT, cnpj TEXT)"
@@ -226,43 +227,51 @@ class Database:
             c.execute(
                 f"CREATE TABLE IF NOT EXISTS {t} (id INTEGER PRIMARY KEY, nome TEXT)"
             )
+        
+        # --- CORREÇÃO IMPORTANTE AQUI ---
+        # Tenta criar a coluna permissoes ANTES de inserir ou atualizar o admin
+        try:
+            c.execute("ALTER TABLE usuarios ADD COLUMN permissoes TEXT")
+        except:
+            pass
+        # --------------------------------
+
         try:
             c.execute("ALTER TABLE agendamentos ADD COLUMN data_chamada DATETIME")
         except:
-            pass  # Colun
+            pass 
         try:
             c.execute(
                 "ALTER TABLE profissionais ADD COLUMN valor_padrao REAL DEFAULT 0"
             )
             c.execute("ALTER TABLE agendamentos ADD COLUMN valor REAL DEFAULT 0")
-            # Coluna para saber se já gerou financeiro automático para não duplicar
             c.execute(
                 "ALTER TABLE agendamentos ADD COLUMN financeiro_gerado INTEGER DEFAULT 0"
             )
         except:
             pass
         try:
-            # Adiciona colunas de Sinais Vitais na tabela de prontuarios
             c.execute("ALTER TABLE prontuarios ADD COLUMN peso REAL")
             c.execute("ALTER TABLE prontuarios ADD COLUMN altura REAL")
             c.execute("ALTER TABLE prontuarios ADD COLUMN pressao TEXT")
             c.execute("ALTER TABLE prontuarios ADD COLUMN temp REAL")
             c.execute("ALTER TABLE prontuarios ADD COLUMN saturacao INTEGER")
-
-            # Adiciona coluna de Alergias na tabela de pacientes (se ainda não tiver)
             c.execute("ALTER TABLE pacientes ADD COLUMN alergias TEXT")
         except:
             pass
 
+        # Cria admin se não existir
         if not c.execute("SELECT * FROM usuarios WHERE username='admin'").fetchone():
             c.execute(
                 "INSERT OR IGNORE INTO usuarios (id, username, password_hash, role, permissoes) VALUES (1, 'admin', ?, 'admin', '[]')",
                 (generate_password_hash("admin123"),),
             )
-        # Se já existir, força as permissões corretas para evitar bugs
+        
+        # Agora é seguro atualizar, pois a coluna permissoes já existe (criada no CREATE ou no ALTER acima)
         c.execute(
             "UPDATE usuarios SET role='admin', permissoes='[]' WHERE username='admin'"
         )
+
         if not c.execute("SELECT * FROM configuracoes WHERE id=1").fetchone():
             c.execute(
                 "INSERT INTO configuracoes (id, nome_clinica, endereco, telefone) VALUES (1, 'Minha Clínica', 'Rua Exemplo, 123', '(11) 9999-9999')"
@@ -271,10 +280,6 @@ class Database:
         c.execute(
             "UPDATE agendamentos SET status='Agendado' WHERE status IS NULL OR status = 'null'"
         )
-        try:
-            c.execute("ALTER TABLE usuarios ADD COLUMN permissoes TEXT")
-        except:
-            pass
 
         conn.commit()
         conn.close()
