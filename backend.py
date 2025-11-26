@@ -607,43 +607,86 @@ def busca_pacientes():
 @login_required
 def save_pac():
     d = request.json
-
-    # CORREÇÃO: Endereço de paciente é texto simples, não usamos json.dumps aqui
+    # ... (mantenha a preparação das variáveis v, end, resp igual ao original) ...
     end = d.get("endereco", "")
-
     resp = json.dumps(d.get("responsavel", {}))
-
-    v = (
-        d["nome"],
-        d.get("cpf"),
-        d.get("rg"),
-        d.get("nasc"),
-        d.get("sexo"),
-        d.get("tel"),
-        d.get("email"),
-        end,  # Salva direto como texto
-        d.get("conv"),
-        d.get("obs"),
-        d.get("meds"),
-        resp,
-    )
+    v = (d["nome"], d.get("cpf"), d.get("rg"), d.get("nasc"), d.get("sexo"), d.get("tel"), d.get("email"), end, d.get("conv"), d.get("obs"), d.get("meds"), resp)
 
     with DB_WRITE_LOCK:
         conn = db.conectar()
+        if not d.get("id"): # Só verifica em NOVO cadastro
+            # Verifica CPF (se tiver) OU Nome+Telefone (se não tiver CPF)
+            if d.get("cpf"):
+                dup = conn.execute("SELECT id FROM pacientes WHERE cpf=?", (d.get("cpf"),)).fetchone()
+            else:
+                dup = conn.execute("SELECT id FROM pacientes WHERE nome=? AND telefone_principal=?", (d["nome"], d.get("tel"))).fetchone()
+            
+            if dup:
+                conn.close()
+                return jsonify({"erro": "Paciente já cadastrado (CPF ou Nome+Tel duplicado)!"}), 400
+
         if d.get("id"):
-            conn.execute(
-                "UPDATE pacientes SET nome=?, cpf=?, rg=?, data_nascimento=?, sexo=?, telefone_principal=?, email=?, endereco=?, convenio_id=?, observacoes_medicas=?, medicamentos_em_uso=?, responsavel=? WHERE id=?",
-                v + (d["id"],),
-            )
+            conn.execute("UPDATE pacientes SET nome=?, cpf=?, rg=?, data_nascimento=?, sexo=?, telefone_principal=?, email=?, endereco=?, convenio_id=?, observacoes_medicas=?, medicamentos_em_uso=?, responsavel=? WHERE id=?", v + (d["id"],))
         else:
-            conn.execute(
-                "INSERT INTO pacientes (nome, cpf, rg, data_nascimento, sexo, telefone_principal, email, endereco, convenio_id, observacoes_medicas, medicamentos_em_uso, responsavel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                v,
-            )
+            conn.execute("INSERT INTO pacientes (nome, cpf, rg, data_nascimento, sexo, telefone_principal, email, endereco, convenio_id, observacoes_medicas, medicamentos_em_uso, responsavel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", v)
         conn.commit()
         conn.close()
-
     return jsonify({"msg": "Salvo"})
+
+@app.route('/api/pacientes/deletar/<int:id>', methods=['DELETE'])
+@login_required
+def deletar_paciente(id):
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        # Verifica histórico completo
+        tem_ag = conn.execute("SELECT id FROM agendamentos WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
+        tem_pr = conn.execute("SELECT id FROM prontuarios WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
+        tem_fin = conn.execute("SELECT id FROM contas_receber WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
+        
+        if tem_ag or tem_pr or tem_fin:
+            conn.execute("UPDATE pacientes SET ativo=0 WHERE id=?", (id,))
+            msg = "Paciente ARQUIVADO (possui histórico). Não aparecerá mais nas listas."
+        else:
+            conn.execute("DELETE FROM pacientes WHERE id=?", (id,))
+            msg = "Paciente EXCLUÍDO (era um cadastro vazio)."
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": msg})
+
+# --- ROTA INTELIGENTE PROFISSIONAIS ---
+@app.route('/api/profissionais/deletar/<int:id>', methods=['DELETE'])
+@login_required
+def deletar_profissional(id):
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        tem_ag = conn.execute("SELECT id FROM agendamentos WHERE profissional_id=? LIMIT 1", (id,)).fetchone()
+        
+        if tem_ag:
+            conn.execute("UPDATE profissionais SET ativo=0 WHERE id=?", (id,))
+            msg = "Profissional INATIVADO (possui agenda). Histórico mantido."
+        else:
+            conn.execute("DELETE FROM profissionais WHERE id=?", (id,))
+            msg = "Profissional EXCLUÍDO permanentemente."
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": msg})
+
+# --- ROTA INTELIGENTE CONVÊNIOS ---
+@app.route('/api/auxiliares/convenios/deletar/<int:id>', methods=['DELETE'])
+@login_required
+def del_conv(id):
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        # Se tiver paciente usando este convênio, não pode excluir nem inativar facilmente
+        uso = conn.execute("SELECT id FROM pacientes WHERE convenio_id=? LIMIT 1", (id,)).fetchone()
+        if uso:
+            conn.close()
+            return jsonify({"erro": "Não é possível excluir: Existem pacientes vinculados a este convênio."}), 400
+            
+        conn.execute("DELETE FROM convenios WHERE id=?", (id,))
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": "Convênio excluído"})
 
 
 @app.route("/api/profissionais", methods=["GET"])
@@ -1277,12 +1320,19 @@ def list_ax(t):
     return jsonify(r)
 
 
-@app.route("/api/auxiliares/<t>/salvar", methods=["POST"])
+@app.route('/api/auxiliares/<t>/salvar', methods=['POST'])
 @login_required
 def save_ax(t):
-    with DB_WRITE_LOCK:  # 🔒 Protege escrita
+    nome = request.json['nome']
+    with DB_WRITE_LOCK:
         conn = db.conectar()
-        conn.execute(f"INSERT INTO {t} (nome) VALUES (?)", (request.json["nome"],))
+        # TRAVA: Verifica se já existe item com esse nome na tabela
+        check = conn.execute(f"SELECT id FROM {t} WHERE nome=?", (nome,)).fetchone()
+        if check:
+            conn.close()
+            return jsonify({"erro": "Item já cadastrado!"}), 400
+            
+        conn.execute(f"INSERT INTO {t} (nome) VALUES (?)", (nome,))
         conn.commit()
         conn.close()
     return jsonify({"msg": "Ok"})
@@ -1311,47 +1361,31 @@ def list_conv():
     return jsonify(r)
 
 
-@app.route("/api/convenios/salvar", methods=["POST"])
+@app.route('/api/convenios/salvar', methods=['POST'])
 @login_required
 def save_conv():
     d = request.json
-    v = (
-        d["nome"],
-        d.get("ans"),
-        d.get("cnpj"),
-        d.get("prazo", 30),
-        d.get("tel"),
-        d.get("email"),
-        d.get("site"),
-    )
+    v = (d['nome'], d.get('ans'), d.get('cnpj'), d.get('prazo', 30), d.get('tel'), d.get('email'), d.get('site'))
 
-    with DB_WRITE_LOCK:  # 🔒 Protege escrita
+    with DB_WRITE_LOCK:
         conn = db.conectar()
-        if d.get("id"):
-            conn.execute(
-                "UPDATE convenios SET nome=?, registro_ans=?, cnpj=?, prazo_pagamento=?, telefone=?, email=?, site=? WHERE id=?",
-                v + (d["id"],),
-            )
+        # TRAVA: Verifica duplicidade de Nome ou CNPJ em novos cadastros
+        if not d.get('id'):
+            check = conn.execute("SELECT id FROM convenios WHERE nome=? OR (cnpj IS NOT NULL AND cnpj=?)", (d['nome'], d.get('cnpj'))).fetchone()
+            if check:
+                conn.close()
+                return jsonify({"erro": "Convênio ou CNPJ já cadastrado!"}), 400
+
+        if d.get('id'):
+            conn.execute("UPDATE convenios SET nome=?, registro_ans=?, cnpj=?, prazo_pagamento=?, telefone=?, email=?, site=? WHERE id=?", v + (d['id'],))
         else:
-            conn.execute(
-                "INSERT INTO convenios (nome, registro_ans, cnpj, prazo_pagamento, telefone, email, site) VALUES (?,?,?,?,?,?,?)",
-                v,
-            )
+            conn.execute("INSERT INTO convenios (nome, registro_ans, cnpj, prazo_pagamento, telefone, email, site) VALUES (?,?,?,?,?,?,?)", v)
         conn.commit()
         conn.close()
 
     return jsonify({"msg": "Ok"})
 
 
-@app.route("/api/auxiliares/convenios/deletar/<int:id>", methods=["DELETE"])
-@login_required
-def del_conv(id):
-    with DB_WRITE_LOCK:  # 🔒 Protege escrita
-        conn = db.conectar()
-        conn.execute("DELETE FROM convenios WHERE id=?", (id,))
-        conn.commit()
-        conn.close()
-    return jsonify({"msg": "Ok"})
 
 
 @app.route("/api/prontuario/<int:id>", methods=["GET"])
