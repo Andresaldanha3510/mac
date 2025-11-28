@@ -714,64 +714,6 @@
         color: white !important;
       }
 
-      @media print {
-        body * {
-          visibility: hidden;
-        }
-
-        #print-receita {
-          visibility: visible;
-          display: block;
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: white;
-          padding: 20px;
-        }
-
-        /* Torna visível o conteúdo, mas respeita se é tabela, texto ou oculto */
-        #print-receita * {
-          visibility: visible;
-        }
-
-        /* Garante que o código CSS não apareça escrito */
-        #print-receita style {
-          display: none !important;
-        }
-
-        .receita-section {
-          margin-bottom: 20px;
-        }
-
-        .receita-section h3 {
-          font-size: 14pt;
-          border-bottom: 1px solid #ccc;
-          margin-bottom: 10px;
-        }
-
-        .receita-footer {
-          position: absolute;
-          bottom: 40px;
-          left: 0;
-          width: 100%;
-          text-align: center;
-        }
-
-        .assinatura-img {
-          max-height: 80px;
-          display: block;
-          margin: 0 auto;
-        }
-
-        .linha-ass {
-          border-top: 1px solid #000;
-          width: 60%;
-          margin: 10px auto;
-        }
-      }
-
       * {
         margin: 0;
         padding: 0;
@@ -935,6 +877,23 @@
       .evento-contador:hover {
         filter: brightness(1.1);
         transform: scale(1.02);
+      }
+      #print-frame {
+        position: fixed;
+        height: 0;
+        width: 0;
+        border: none;
+        visibility: hidden;
+      }
+
+      /* Garante que o sistema nunca suma, mesmo se imprimir */
+      @media print {
+        #app-screen {
+          display: flex !important;
+        }
+        aside {
+          display: flex !important;
+        }
       }
 
       #app-screen {
@@ -1711,70 +1670,12 @@
         display: none;
       }
 
-      @media print {
-        @page {
-          margin: 1cm; /* Margem segura para não cortar cabeçalho */
-          size: auto; /* Deixa o navegador decidir a orientação se precisar */
-        }
-
-        html,
-        body {
-          height: auto !important;
-          overflow: visible !important;
-          background: white !important;
-          color: black !important;
-          margin: 0 !important;
-          padding: 0 !important;
-        }
-
-        /* Esconde TUDO da tela normal */
-        #login-screen,
-        #app-screen,
-        .overlay,
-        #toast,
-        aside,
-        .no-print {
-          display: none !important;
-        }
-
-        /* Configura a área de impressão */
-        #print-receita {
-          display: block !important;
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: auto !important; /* Importante para não cortar o fim */
-          z-index: 9999;
-          background: white;
-          padding: 0;
-          margin: 0;
-          overflow: visible !important; /* Permite quebrar página */
-        }
-
-        #print-receita * {
-          visibility: visible;
-        }
-
-        /* Ajustes específicos para Tabelas de Relatório */
-        .rel-print-body table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 9pt; /* Fonte menor para caber mais colunas */
-        }
-
-        .rel-print-body th,
-        .rel-print-body td {
-          border: 1px solid #000;
-          padding: 4px;
-          color: #000;
-          white-space: normal; /* Permite quebrar linha dentro da célula */
-        }
-
-        /* Esconde o código CSS injetado se aparecer */
-        #print-receita style {
-          display: none !important;
-        }
+      #print-frame {
+        position: fixed;
+        height: 0;
+        width: 0;
+        border: none;
+        visibility: hidden;
       }
     </style>
   </head>
@@ -8215,59 +8116,84 @@
         const htmlTabela = el("printable-area").innerHTML;
         const nomeClinica = clinicConfig.nome_clinica || "Clínica Médica";
 
-        const printDiv = el("print-receita");
+        // 1. Verifica se já existe o iframe oculto, se não, cria
+        let iframe = document.getElementById("print-frame");
+        if (!iframe) {
+          iframe = document.createElement("iframe");
+          iframe.id = "print-frame";
+          document.body.appendChild(iframe);
+        }
 
-        printDiv.innerHTML = `
+        // 2. Monta o conteúdo HTML exclusivo para a impressão
+        // Note que criamos um HTML completo do zero dentro do iframe
+        const conteudo = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <title>Impressão</title>
               <style>
-                  /* ESTILOS DE IMPRESSÃO (MODO PAPEL) */
-                  .rel-print-header { text-align: center; border-bottom: 2px solid #000; margin-bottom: 20px; padding-bottom: 10px; }
-                  .rel-print-header h1 { margin: 0; font-size: 18pt; color: #000 !important; }
-                  .rel-print-header p { margin: 5px 0; color: #000 !important; }
+                  body { font-family: sans-serif; margin: 20px; color: #000; }
+                  .header { text-align: center; border-bottom: 2px solid #000; margin-bottom: 20px; padding-bottom: 10px; }
+                  h1 { margin: 0; font-size: 18pt; }
+                  p { margin: 5px 0; font-size: 12pt; }
                   
                   table { width: 100%; border-collapse: collapse; font-size: 10pt; }
                   
-                  /* Força PRETO no papel, ignorando o branco da tela */
+                  /* Força bordas e cor preta para o papel */
                   th { 
-                      background: #eee !important; 
-                      color: #000 !important; 
+                      background: #eee; 
+                      color: #000; 
                       font-weight: bold; 
                       border: 1px solid #000; 
                       padding: 6px; 
+                      text-align: left;
                   }
                   
                   td { 
                       border: 1px solid #000; 
                       padding: 6px; 
-                      color: #000 !important; /* <--- O SEGREDO ESTÁ AQUI */
+                      color: #000; 
                   }
                   
-                  /* Remove cores de fundo dos badges para economizar tinta */
+                  /* Remove o visual de "botão/badge" para economizar tinta */
                   .status-badge {
-                      border: 1px solid #000;
-                      color: #000 !important;
-                      background: transparent !important;
-                      padding: 2px 4px;
+                      border: none;
+                      background: transparent;
+                      color: #000;
+                      font-weight: bold;
+                      padding: 0;
                   }
-
+                  
                   .no-print { display: none; }
               </style>
-
-              <div class="rel-print-header">
+            </head>
+            <body>
+              <div class="header">
                   <h1>${nomeClinica}</h1>
                   <p>Relatório: <strong>${titulo}</strong></p>
-                  <small style="color:#000">Período: ${dtIni} até ${dtFim}</small>
+                  <p><small>Período: ${dtIni} até ${dtFim}</small></p>
               </div>
 
-              <div class="rel-print-body">
-                  ${htmlTabela}
-              </div>
+              ${htmlTabela}
 
-              <div style="margin-top: 30px; font-size: 8pt; text-align: right; color: #000; border-top: 1px solid #000;">
+              <div style="margin-top: 30px; font-size: 8pt; text-align: right; border-top: 1px solid #000; padding-top: 5px;">
                   Gerado em ${new Date().toLocaleString()}
               </div>
+            </body>
+            </html>
           `;
 
-        window.print();
+        // 3. Escreve no Iframe
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(conteudo);
+        doc.close();
+
+        // 4. Manda o Iframe imprimir (O sistema principal fica intacto no fundo)
+        setTimeout(() => {
+          iframe.contentWindow.focus();
+          iframe.contentWindow.print();
+        }, 500);
       }
       function aplicarPermissoes(permissoes, role) {
         // Converte string JSON para array se necessário
