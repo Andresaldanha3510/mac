@@ -410,7 +410,7 @@
       </div>
 
       <div class="ticker-wrap">
-        <div class="ticker">
+        <div class="ticker" id="marquee-text">
           ✅ Bem-vindo à nossa clínica! • Favor manter o silêncio • 📡 Para
           Wi-Fi solicite a senha na recepção • Aceitamos Convênios e Particular
           • 💚 Cuide da sua saúde! • Obrigado por sua confiança!
@@ -421,14 +421,12 @@
     </footer>
 
     <script>
-      // --- MUDANÇA PRINCIPAL: Usamos Timestamp (Data/Hora) e não ID ---
       let ultimoTimestampChamada = "";
       let tempoEspera = 0;
       let clinicName = "ClinicaSys";
 
       const audio = new Audio(
         "https://www.soundjay.com/transportation/sounds/train-station-announcement-1.mp3"
-        
       );
 
       function updateClock() {
@@ -449,9 +447,16 @@
           const res = await fetch("/api/config/publico");
           if (res.ok) {
             const config = await res.json();
+            
+            // Carrega Nome da Clínica
             if (config.nome_clinica) {
               clinicName = config.nome_clinica;
               document.getElementById("clinic-name").innerText = clinicName;
+            }
+            
+            // Carrega Mensagem da TV (Aqui está a mágica!)
+            if (config.mensagem_tv) {
+              document.getElementById("marquee-text").innerText = config.mensagem_tv;
             }
           }
         } catch (e) {
@@ -473,16 +478,12 @@
 
           if (!lista) return;
 
-          // 1. Separa quem está "Em Atendimento"
           let chamados = lista.filter((p) => p.status === "Em Atendimento");
 
-          // 2. ORDENAÇÃO CRUCIAL: O mais recente (data_chamada maior) fica em PRIMEIRO [0]
-          // Isso garante que se clicarmos em alguém, ele sobe para o topo da lista
+          // Ordenação pelo mais recente
           chamados.sort((a, b) => {
             if (!a.data_chamada) return 1;
             if (!b.data_chamada) return -1;
-            // Compara strings ISO (ex: '2023-10-27 10:00:05' vs '2023-10-27 10:00:00')
-            // b.localeCompare(a) faz ordem decrescente (mais novo primeiro)
             return b.data_chamada.localeCompare(a.data_chamada);
           });
 
@@ -492,19 +493,15 @@
           );
           document.getElementById("queue-count").innerText = fila.length;
 
-          // 3. Lógica de Exibição
           if (chamados.length > 0) {
-            const atual = chamados[0]; // Pega o PRIMEIRO (o mais recente clicado)
+            const atual = chamados[0];
             atualizarTelaPrincipal(atual);
 
-            // VERIFICA SE HOUVE NOVA CHAMADA (Timestamp diferente)
-            // Se for o mesmo paciente, mas com novo clique, o timestamp mudou -> Toca som
             if (atual.data_chamada !== ultimoTimestampChamada) {
               ultimoTimestampChamada = atual.data_chamada;
               tempoEspera = 0;
               tocarAlerta(atual);
             } else {
-              // Apenas conta o tempo se for a mesma chamada antiga
               tempoEspera++;
               if (tempoEspera > 0 && tempoEspera % 60 === 0) {
                 document.getElementById(
@@ -515,7 +512,6 @@
               }
             }
           } else {
-            // Ninguém sendo chamado
             document
               .getElementById("painel-destaque")
               .classList.remove("calling-animation");
@@ -525,8 +521,6 @@
             document.getElementById("txt-prof").innerText = "---";
           }
 
-          // 4. Histórico: Pega os chamados, excluindo o atual (index 0)
-          // Mostra do index 1 ao 6 (os 6 anteriores)
           const historico = chamados.slice(1, 7);
           renderizarHistorico(historico);
         } catch (e) {
@@ -540,19 +534,14 @@
         document.getElementById("txt-sala").innerText =
           p.sala_nome || "Consultório";
 
-        let medico = p.profissional_nome
-          ? p.profissional_nome.split(" ")[0]
-          : "";
-        if (p.profissional_nome && p.profissional_nome.includes("Dr"))
-          medico = p.profissional_nome;
-
+        // MOSTRAR NOME COMPLETO DO MÉDICO (Correção solicitada)
+        let medico = p.profissional_nome || "";
         document.getElementById("txt-prof").innerText = "👨‍⚕️ " + medico;
       }
 
       function renderizarHistorico(lista) {
         const container = document.getElementById("lista-historico");
 
-        // Se histórico vazio e ninguém na tela principal, não faz nada
         if (
           lista.length === 0 &&
           document.getElementById("txt-nome").innerText.includes("Aguardando")
@@ -579,9 +568,8 @@
       function tocarAlerta(p) {
         const painel = document.getElementById("painel-destaque");
 
-        // Reinicia animação
         painel.classList.remove("calling-animation");
-        void painel.offsetWidth; // Trigger reflow
+        void painel.offsetWidth; 
         painel.classList.add("calling-animation");
 
         audio.currentTime = 0;
@@ -608,11 +596,9 @@
       carregarConfig();
       buscarDados();
 
-      // Atualiza a cada 3 segundos para ser bem responsivo
+      // Atualiza dados e também a configuração (texto da TV) a cada minuto
       setInterval(buscarDados, 3000);
-
-      // Recarrega config a cada 5 minutos
-      setInterval(carregarConfig, 300000);
+      setInterval(carregarConfig, 60000); 
     </script>
   </body>
 </html>

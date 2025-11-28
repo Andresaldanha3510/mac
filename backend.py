@@ -23,6 +23,8 @@ from flask_login import (
     current_user,
 )
 import time
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
 
 # ============================================
 # 🔒 CACHE GLOBAL COM LOCK SEGURO
@@ -40,17 +42,17 @@ DB_WRITE_LOCK = threading.RLock()
 # 🔥 SEMPRE USA AppData (desenvolvimento E produção)
 app_data = os.getenv("APPDATA")
 if not app_data:
-    # Fallback se APPDATA não existir (Linux/Mac)
     app_data = os.path.expanduser("~/.clinicasys")
 
 DATA_DIR = os.path.join(app_data, "ClinicaSysPro")
 
 if getattr(sys, "frozen", False):
-    # Modo EXE: BASE_DIR = pasta do executável
-    BASE_DIR = os.path.dirname(sys.executable)
-    sys.stderr = open(os.path.join(BASE_DIR, "debug_erro.txt"), "w")
+    # Se estiver rodando como EXE, os arquivos HTML estão na pasta temporária interna
+    BASE_DIR = sys._MEIPASS
+    # O log de erros vai para a pasta de dados (AppData) para não perder
+    sys.stderr = open(os.path.join(DATA_DIR, "debug_erro.txt"), "w")
 else:
-    # Modo desenvolvimento: BASE_DIR = pasta do script
+    # Modo desenvolvimento
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 if not os.path.exists(DATA_DIR):
@@ -227,7 +229,7 @@ class Database:
             c.execute(
                 f"CREATE TABLE IF NOT EXISTS {t} (id INTEGER PRIMARY KEY, nome TEXT)"
             )
-        
+
         # --- CORREÇÃO IMPORTANTE AQUI ---
         # Tenta criar a coluna permissoes ANTES de inserir ou atualizar o admin
         try:
@@ -239,7 +241,7 @@ class Database:
         try:
             c.execute("ALTER TABLE agendamentos ADD COLUMN data_chamada DATETIME")
         except:
-            pass 
+            pass
         try:
             c.execute(
                 "ALTER TABLE profissionais ADD COLUMN valor_padrao REAL DEFAULT 0"
@@ -266,7 +268,7 @@ class Database:
                 "INSERT OR IGNORE INTO usuarios (id, username, password_hash, role, permissoes) VALUES (1, 'admin', ?, 'admin', '[]')",
                 (generate_password_hash("admin123"),),
             )
-        
+
         # Agora é seguro atualizar, pois a coluna permissoes já existe (criada no CREATE ou no ALTER acima)
         c.execute(
             "UPDATE usuarios SET role='admin', permissoes='[]' WHERE username='admin'"
@@ -276,10 +278,69 @@ class Database:
             c.execute(
                 "INSERT INTO configuracoes (id, nome_clinica, endereco, telefone) VALUES (1, 'Minha Clínica', 'Rua Exemplo, 123', '(11) 9999-9999')"
             )
+        try:
+            c.execute("ALTER TABLE configuracoes ADD COLUMN mensagem_tv TEXT")
+        except:
+            pass
 
         c.execute(
             "UPDATE agendamentos SET status='Agendado' WHERE status IS NULL OR status = 'null'"
         )
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS modelos_documentos (id INTEGER PRIMARY KEY, tipo TEXT, nome TEXT, conteudo TEXT)"
+        )
+
+        try:
+            c.execute("ALTER TABLE profissionais ADD COLUMN assinatura_path TEXT")
+        except:
+            pass
+
+        try:
+            c.execute("ALTER TABLE prontuarios ADD COLUMN anexos TEXT")
+        except:
+            pass
+        try:
+            # Tabela de ligação: Preço do Procedimento x Convênio
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS procedimento_precos (id INTEGER PRIMARY KEY, procedimento_id INTEGER, convenio_id INTEGER, valor REAL)"
+            )
+
+            # Colunas extras para Procedimentos
+            c.execute(
+                "ALTER TABLE procedimentos ADD COLUMN tempo_padrao INTEGER DEFAULT 30"
+            )
+            c.execute(
+                "ALTER TABLE procedimentos ADD COLUMN valor_padrao REAL DEFAULT 0"
+            )
+            c.execute("ALTER TABLE procedimentos ADD COLUMN repasse REAL DEFAULT 0")
+            c.execute("ALTER TABLE procedimentos ADD COLUMN codigo_tuss TEXT")
+        except:
+            pass
+
+        try:
+            # Tabela de arquivo do convênio
+            c.execute("ALTER TABLE convenios ADD COLUMN arquivo_tabela TEXT")
+        except:
+            pass
+
+        try:
+            c.execute("ALTER TABLE prontuarios ADD COLUMN queixa_principal TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN subjetivo TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN objetivo TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN avaliacao TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN plano TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN conduta TEXT")
+            c.execute("ALTER TABLE prontuarios ADD COLUMN retorno TEXT")
+        except:
+            pass
+        try:
+            c.execute("ALTER TABLE prontuarios ADD COLUMN retificacao TEXT")
+        except:
+            pass
+        try:
+            c.execute("ALTER TABLE profissionais ADD COLUMN foto TEXT")
+        except:
+            pass
 
         conn.commit()
         conn.close()
@@ -375,21 +436,104 @@ def logout():
     return jsonify({"msg": "Saiu"})
 
 
+@app.route("/api/procedimentos/detalhes/<int:id>", methods=["GET"])
+@login_required
+def get_proc_detalhes(id):
+    conn = db.conectar(read_only=True)
+    # Pega dados básicos
+    proc = conn.execute("SELECT * FROM procedimentos WHERE id=?", (id,)).fetchone()
+    # Pega preços por convênio
+    precos = conn.execute(
+        """
+        SELECT c.id as convenio_id, c.nome as convenio_nome, pp.valor 
+        FROM convenios c 
+        LEFT JOIN procedimento_precos pp ON pp.convenio_id = c.id AND pp.procedimento_id = ?
+        ORDER BY c.nome
+    """,
+        (id,),
+    ).fetchall()
+    conn.close()
+    return jsonify({"dados": dict(proc), "precos": [dict(p) for p in precos]})
+
+
+@app.route("/api/procedimentos/salvar_completo", methods=["POST"])
+@login_required
+def save_proc_completo():
+    d = request.json
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+
+        # 1. Salva/Cria o Procedimento Base
+        if d.get("id"):
+            conn.execute(
+                "UPDATE procedimentos SET nome=?, tempo_padrao=?, valor_padrao=?, repasse=?, codigo_tuss=? WHERE id=?",
+                (
+                    d["nome"],
+                    d.get("tempo", 30),
+                    d.get("valor", 0),
+                    d.get("repasse", 0),
+                    d.get("codigo", ""),
+                    d["id"],
+                ),
+            )
+            proc_id = d["id"]
+        else:
+            cursor = conn.execute(
+                "INSERT INTO procedimentos (nome, tempo_padrao, valor_padrao, repasse, codigo_tuss) VALUES (?,?,?,?,?)",
+                (
+                    d["nome"],
+                    d.get("tempo", 30),
+                    d.get("valor", 0),
+                    d.get("repasse", 0),
+                    d.get("codigo", ""),
+                ),
+            )
+            proc_id = cursor.lastrowid
+
+        # 2. Salva a Tabela de Preços por Convênio
+        precos = d.get(
+            "precos_lista", []
+        )  # Espera lista: [{convenio_id: 1, valor: 100}, ...]
+
+        # Limpa preços antigos desse procedimento para regravar (mais fácil que update um por um)
+        conn.execute(
+            "DELETE FROM procedimento_precos WHERE procedimento_id=?", (proc_id,)
+        )
+
+        for p in precos:
+            if p.get("valor") and float(p["valor"]) > 0:
+                conn.execute(
+                    "INSERT INTO procedimento_precos (procedimento_id, convenio_id, valor) VALUES (?,?,?)",
+                    (proc_id, p["convenio_id"], p["valor"]),
+                )
+
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": "Procedimento salvo com sucesso!"})
+
+
 @app.route("/api/check_auth")
 def check_auth():
     if current_user.is_authenticated:
         # Busca permissões atualizadas no banco para garantir
         try:
             conn = db.conectar(read_only=True)
-            u = conn.execute("SELECT role, permissoes FROM usuarios WHERE id=?", (current_user.id,)).fetchone()
+            u = conn.execute(
+                "SELECT role, permissoes FROM usuarios WHERE id=?", (current_user.id,)
+            ).fetchone()
             conn.close()
             role = u["role"] if u else "user"
             perms = u["permissoes"] if u and u["permissoes"] else "[]"
-            return jsonify({"user": current_user.username, "role": role, "perms": perms})
+            return jsonify(
+                {"user": current_user.username, "role": role, "perms": perms}
+            )
         except:
-            return jsonify({"user": current_user.username, "role": "user", "perms": "[]"})
-            
+            return jsonify(
+                {"user": current_user.username, "role": "user", "perms": "[]"}
+            )
+
     return jsonify({"erro": "Nao logado"}), 401
+
 
 @app.route("/api/config", methods=["GET"])
 @login_required
@@ -406,13 +550,19 @@ def get_config():
 def get_config_publico():
     """🔓 Rota pública para TV acessar configurações"""
     conn = db.conectar(read_only=True)
+    # Adicionado mensagem_tv na consulta
     c = conn.execute(
-        "SELECT nome_clinica, endereco, telefone FROM configuracoes WHERE id=1"
+        "SELECT nome_clinica, endereco, telefone, mensagem_tv FROM configuracoes WHERE id=1"
     ).fetchone()
     conn.close()
-    data = (
-        dict(c) if c else {"nome_clinica": "ClinicaSys", "endereco": "", "telefone": ""}
-    )
+
+    data = dict(c) if c else {}
+    # Define um padrão se estiver vazio
+    if not data.get("mensagem_tv"):
+        data["mensagem_tv"] = (
+            "Bem-vindo à nossa clínica! • Por favor, aguarde ser chamado."
+        )
+
     return jsonify(data)
 
 
@@ -420,17 +570,14 @@ def get_config_publico():
 @login_required
 def save_config():
     d = request.json
-
-    # Validação básica de CNPJ
-    cnpj = d.get("cnpj", "")
-    if cnpj and len(cnpj) > 20:  # Evita injeção de texto muito longo
-        cnpj = cnpj[:20]
+    cnpj = d.get("cnpj", "")[:20]
 
     with DB_WRITE_LOCK:
         conn = db.conectar()
+        # Adicionado msg_tv no update
         conn.execute(
-            "UPDATE configuracoes SET nome_clinica=?, endereco=?, telefone=?, cnpj=? WHERE id=1",
-            (d["nome"], d["end"], d["tel"], cnpj),
+            "UPDATE configuracoes SET nome_clinica=?, endereco=?, telefone=?, cnpj=?, mensagem_tv=? WHERE id=1",
+            (d["nome"], d["end"], d["tel"], cnpj, d.get("msg_tv", "")),
         )
         conn.commit()
         conn.close()
@@ -488,7 +635,7 @@ def dash():
     s = {
         "hoje": 0,
         "mes": 0,
-        "faturamento": "---", # Padrão escondido
+        "faturamento": "---",  # Padrão escondido
         "pendencias": "---",  # Padrão escondido
         "proximos": [],
         "grafico": [],
@@ -502,16 +649,16 @@ def dash():
             "SELECT COUNT(*) FROM agendamentos WHERE data_hora_inicio BETWEEN ? AND ? AND (status!='Cancelado' OR status IS NULL)",
             (m_ini, mes_fim),
         ).fetchone()[0]
-        
+
         # --- SEGURANÇA FINANCEIRA ---
         # Só calcula e mostra dinheiro se for ADMIN
-        if current_user.role == 'admin':
+        if current_user.role == "admin":
             fat_val = c.execute(
                 "SELECT COALESCE(SUM(valor_pago),0) FROM contas_receber WHERE data_pagamento BETWEEN ? AND ?",
                 (m_ini, mes_fim),
             ).fetchone()[0]
-            s["faturamento"] = fat_val # Envia o número real
-            
+            s["faturamento"] = fat_val  # Envia o número real
+
             s["pendencias"] = c.execute(
                 "SELECT COUNT(*) FROM contas_receber WHERE status='Pendente' AND data_vencimento < ?",
                 (h_ini,),
@@ -607,45 +754,93 @@ def busca_pacientes():
 @login_required
 def save_pac():
     d = request.json
-    # ... (mantenha a preparação das variáveis v, end, resp igual ao original) ...
+
+    # 1. Validação
+    if not d.get("nome"):
+        return jsonify({"erro": "Nome do paciente é obrigatório"}), 400
+
     end = d.get("endereco", "")
     resp = json.dumps(d.get("responsavel", {}))
-    v = (d["nome"], d.get("cpf"), d.get("rg"), d.get("nasc"), d.get("sexo"), d.get("tel"), d.get("email"), end, d.get("conv"), d.get("obs"), d.get("meds"), resp)
+    v = (
+        d["nome"],
+        d.get("cpf"),
+        d.get("rg"),
+        d.get("nasc"),
+        d.get("sexo"),
+        d.get("tel"),
+        d.get("email"),
+        end,
+        d.get("conv"),
+        d.get("obs"),
+        d.get("meds"),
+        resp,
+        d.get("foto"),
+    )
 
     with DB_WRITE_LOCK:
         conn = db.conectar()
-        if not d.get("id"): # Só verifica em NOVO cadastro
-            # Verifica CPF (se tiver) OU Nome+Telefone (se não tiver CPF)
-            if d.get("cpf"):
-                dup = conn.execute("SELECT id FROM pacientes WHERE cpf=?", (d.get("cpf"),)).fetchone()
-            else:
-                dup = conn.execute("SELECT id FROM pacientes WHERE nome=? AND telefone_principal=?", (d["nome"], d.get("tel"))).fetchone()
-            
-            if dup:
+
+        # 2. TRAVA DE DUPLICIDADE (CPF)
+        if d.get("cpf") and len(d.get("cpf")) > 5:  # Só valida se tiver CPF preenchido
+            check = conn.execute(
+                "SELECT id FROM pacientes WHERE cpf=? AND ativo=1", (d.get("cpf"),)
+            ).fetchone()
+            # Se achou e não é o mesmo ID que estamos editando
+            if check and (not d.get("id") or str(check["id"]) != str(d.get("id"))):
                 conn.close()
-                return jsonify({"erro": "Paciente já cadastrado (CPF ou Nome+Tel duplicado)!"}), 400
+                return jsonify({"erro": "Este CPF já pertence a outro paciente!"}), 400
+
+        # 3. Trava de Duplicidade (Nome + Telefone) - Caso não tenha CPF
+        elif not d.get("id"):
+            check = conn.execute(
+                "SELECT id FROM pacientes WHERE nome=? AND telefone_principal=? AND ativo=1",
+                (d["nome"], d.get("tel")),
+            ).fetchone()
+            if check:
+                conn.close()
+                return (
+                    jsonify({"erro": "Paciente com mesmo Nome e Telefone já existe!"}),
+                    400,
+                )
 
         if d.get("id"):
-            conn.execute("UPDATE pacientes SET nome=?, cpf=?, rg=?, data_nascimento=?, sexo=?, telefone_principal=?, email=?, endereco=?, convenio_id=?, observacoes_medicas=?, medicamentos_em_uso=?, responsavel=? WHERE id=?", v + (d["id"],))
+            conn.execute(
+                "UPDATE pacientes SET nome=?, cpf=?, rg=?, data_nascimento=?, sexo=?, telefone_principal=?, email=?, endereco=?, convenio_id=?, observacoes_medicas=?, medicamentos_em_uso=?, responsavel=?, foto=? WHERE id=?",
+                v + (d["id"],),
+            )
         else:
-            conn.execute("INSERT INTO pacientes (nome, cpf, rg, data_nascimento, sexo, telefone_principal, email, endereco, convenio_id, observacoes_medicas, medicamentos_em_uso, responsavel) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", v)
+            conn.execute(
+                "INSERT INTO pacientes (nome, cpf, rg, data_nascimento, sexo, telefone_principal, email, endereco, convenio_id, observacoes_medicas, medicamentos_em_uso, responsavel, foto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                v,
+            )
+
         conn.commit()
         conn.close()
+
     return jsonify({"msg": "Salvo"})
 
-@app.route('/api/pacientes/deletar/<int:id>', methods=['DELETE'])
+
+@app.route("/api/pacientes/deletar/<int:id>", methods=["DELETE"])
 @login_required
 def deletar_paciente(id):
     with DB_WRITE_LOCK:
         conn = db.conectar()
         # Verifica histórico completo
-        tem_ag = conn.execute("SELECT id FROM agendamentos WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
-        tem_pr = conn.execute("SELECT id FROM prontuarios WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
-        tem_fin = conn.execute("SELECT id FROM contas_receber WHERE paciente_id=? LIMIT 1", (id,)).fetchone()
-        
+        tem_ag = conn.execute(
+            "SELECT id FROM agendamentos WHERE paciente_id=? LIMIT 1", (id,)
+        ).fetchone()
+        tem_pr = conn.execute(
+            "SELECT id FROM prontuarios WHERE paciente_id=? LIMIT 1", (id,)
+        ).fetchone()
+        tem_fin = conn.execute(
+            "SELECT id FROM contas_receber WHERE paciente_id=? LIMIT 1", (id,)
+        ).fetchone()
+
         if tem_ag or tem_pr or tem_fin:
             conn.execute("UPDATE pacientes SET ativo=0 WHERE id=?", (id,))
-            msg = "Paciente ARQUIVADO (possui histórico). Não aparecerá mais nas listas."
+            msg = (
+                "Paciente ARQUIVADO (possui histórico). Não aparecerá mais nas listas."
+            )
         else:
             conn.execute("DELETE FROM pacientes WHERE id=?", (id,))
             msg = "Paciente EXCLUÍDO (era um cadastro vazio)."
@@ -653,14 +848,17 @@ def deletar_paciente(id):
         conn.close()
     return jsonify({"msg": msg})
 
+
 # --- ROTA INTELIGENTE PROFISSIONAIS ---
-@app.route('/api/profissionais/deletar/<int:id>', methods=['DELETE'])
+@app.route("/api/profissionais/deletar/<int:id>", methods=["DELETE"])
 @login_required
 def deletar_profissional(id):
     with DB_WRITE_LOCK:
         conn = db.conectar()
-        tem_ag = conn.execute("SELECT id FROM agendamentos WHERE profissional_id=? LIMIT 1", (id,)).fetchone()
-        
+        tem_ag = conn.execute(
+            "SELECT id FROM agendamentos WHERE profissional_id=? LIMIT 1", (id,)
+        ).fetchone()
+
         if tem_ag:
             conn.execute("UPDATE profissionais SET ativo=0 WHERE id=?", (id,))
             msg = "Profissional INATIVADO (possui agenda). Histórico mantido."
@@ -671,18 +869,28 @@ def deletar_profissional(id):
         conn.close()
     return jsonify({"msg": msg})
 
+
 # --- ROTA INTELIGENTE CONVÊNIOS ---
-@app.route('/api/auxiliares/convenios/deletar/<int:id>', methods=['DELETE'])
+@app.route("/api/auxiliares/convenios/deletar/<int:id>", methods=["DELETE"])
 @login_required
 def del_conv(id):
     with DB_WRITE_LOCK:
         conn = db.conectar()
         # Se tiver paciente usando este convênio, não pode excluir nem inativar facilmente
-        uso = conn.execute("SELECT id FROM pacientes WHERE convenio_id=? LIMIT 1", (id,)).fetchone()
+        uso = conn.execute(
+            "SELECT id FROM pacientes WHERE convenio_id=? LIMIT 1", (id,)
+        ).fetchone()
         if uso:
             conn.close()
-            return jsonify({"erro": "Não é possível excluir: Existem pacientes vinculados a este convênio."}), 400
-            
+            return (
+                jsonify(
+                    {
+                        "erro": "Não é possível excluir: Existem pacientes vinculados a este convênio."
+                    }
+                ),
+                400,
+            )
+
         conn.execute("DELETE FROM convenios WHERE id=?", (id,))
         conn.commit()
         conn.close()
@@ -707,47 +915,135 @@ def list_prof():
 @login_required
 def save_prof():
     d = request.json
-    disp = json.dumps(d.get("dias", []))
-    end = json.dumps(d.get("endereco", {}))
-    bank = json.dumps(d.get("banco", {}))
 
-    # 1. ADICIONAMOS O VALOR PADRÃO AQUI NO FINAL DA LISTA (com valor 0 se não vier nada)
-    v = (
-        d["nome"],
-        d.get("crm"),
-        d.get("cpf"),
-        d.get("nasc"),
-        d.get("esp_id"),
-        d.get("email"),
-        d.get("tel"),
-        end,
-        bank,
-        d.get("cor", "#10B981"),
-        d.get("comissao", 0),
-        d.get("bio"),
-        disp,
-        d.get("ativo", 1),
-        d.get("valor_padrao", 0),  # <--- NOVO CAMPO AQUI
-    )
+    if not d.get("nome"):
+        return jsonify({"erro": "Nome é obrigatório"}), 400
 
-    with DB_WRITE_LOCK:  # 🔒 Protege escrita
+    with DB_WRITE_LOCK:
         conn = db.conectar()
+
+        # Verifica CPF
+        if d.get("cpf"):
+            check_cpf = conn.execute(
+                "SELECT id FROM profissionais WHERE cpf=? AND ativo=1", (d.get("cpf"),)
+            ).fetchone()
+            if check_cpf and (
+                not d.get("id") or str(check_cpf["id"]) != str(d.get("id"))
+            ):
+                conn.close()
+                return (
+                    jsonify({"erro": "CPF já cadastrado para outro profissional!"}),
+                    400,
+                )
+
+        disp = json.dumps(d.get("dias", []))
+        end = json.dumps(d.get("endereco", {}))
+        bank = json.dumps(d.get("banco", {}))
+
+        # ADICIONADO: d.get("foto", "") no final da tupla
+        v = (
+            d["nome"],
+            d.get("crm"),
+            d.get("cpf"),
+            d.get("nasc"),
+            d.get("esp_id"),
+            d.get("email"),
+            d.get("tel"),
+            end,
+            bank,
+            d.get("cor", "#10B981"),
+            d.get("comissao", 0),
+            d.get("bio"),
+            disp,
+            d.get("ativo", 1),
+            d.get("valor_padrao", 0),
+            d.get("assinatura_path", ""),
+            d.get("foto", ""),
+        )
+
         if d.get("id"):
-            # 2. ATUALIZAMOS O UPDATE (Adicionamos valor_padrao=?)
+            # ADICIONADO: foto=? no SQL
             conn.execute(
-                "UPDATE profissionais SET nome=?, crm=?, cpf=?, data_nascimento=?, especialidade_id=?, email=?, telefone=?, endereco=?, dados_bancarios=?, cor_agenda=?, comissao=?, bio=?, disponibilidade=?, ativo=?, valor_padrao=? WHERE id=?",
+                "UPDATE profissionais SET nome=?, crm=?, cpf=?, data_nascimento=?, especialidade_id=?, email=?, telefone=?, endereco=?, dados_bancarios=?, cor_agenda=?, comissao=?, bio=?, disponibilidade=?, ativo=?, valor_padrao=?, assinatura_path=?, foto=? WHERE id=?",
                 v + (d["id"],),
             )
         else:
-            # 3. ATUALIZAMOS O INSERT (Adicionamos valor_padrao e mais uma ?)
+            # ADICIONADO: foto e ? no SQL
             conn.execute(
-                "INSERT INTO profissionais (nome, crm, cpf, data_nascimento, especialidade_id, email, telefone, endereco, dados_bancarios, cor_agenda, comissao, bio, disponibilidade, ativo, valor_padrao) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO profissionais (nome, crm, cpf, data_nascimento, especialidade_id, email, telefone, endereco, dados_bancarios, cor_agenda, comissao, bio, disponibilidade, ativo, valor_padrao, assinatura_path, foto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 v,
             )
+
         conn.commit()
         conn.close()
 
     return jsonify({"msg": "Salvo"})
+
+
+@app.route("/api/matriz_precos", methods=["GET"])
+@login_required
+def get_matriz_precos():
+    conn = db.conectar(read_only=True)
+
+    # 1. Busca todos os convênios ativos
+    convs = [
+        dict(c)
+        for c in conn.execute("SELECT id, nome FROM convenios ORDER BY nome").fetchall()
+    ]
+
+    # 2. Busca todos os procedimentos
+    procs = [
+        dict(p)
+        for p in conn.execute(
+            "SELECT id, nome, codigo_tuss FROM procedimentos ORDER BY nome"
+        ).fetchall()
+    ]
+
+    # 3. Busca todos os preços já cadastrados
+    precos_db = conn.execute(
+        "SELECT procedimento_id, convenio_id, valor FROM procedimento_precos"
+    ).fetchall()
+
+    conn.close()
+
+    # Cria um dicionário para acesso rápido: precos_map['procID_convID'] = valor
+    precos_map = {}
+    for p in precos_db:
+        chave = f"{p['procedimento_id']}_{p['convenio_id']}"
+        precos_map[chave] = p["valor"]
+
+    return jsonify({"convs": convs, "procs": procs, "mapa": precos_map})
+
+
+@app.route("/api/matriz_precos/salvar", methods=["POST"])
+@login_required
+def save_matriz_precos():
+    dados = request.json.get("alteracoes", [])  # Lista de {proc_id, conv_id, valor}
+
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        for item in dados:
+            pid = item["proc_id"]
+            cid = item["conv_id"]
+            val = item["valor"]
+
+            # Remove preço anterior
+            conn.execute(
+                "DELETE FROM procedimento_precos WHERE procedimento_id=? AND convenio_id=?",
+                (pid, cid),
+            )
+
+            # Se tiver valor, insere o novo (se for 0 ou vazio, deixa deletado)
+            if val and float(val) > 0:
+                conn.execute(
+                    "INSERT INTO procedimento_precos (procedimento_id, convenio_id, valor) VALUES (?,?,?)",
+                    (pid, cid, val),
+                )
+
+        conn.commit()
+        conn.close()
+
+    return jsonify({"msg": "Matriz atualizada com sucesso!"})
 
 
 @app.route("/api/agenda", methods=["GET"])
@@ -760,13 +1056,24 @@ def list_ag():
 
     conn = db.conectar(read_only=True)
 
-    # --- CORREÇÃO: USAR LEFT JOIN PARA NÃO ESCONDER ERROS ---
-    q = "SELECT a.*, COALESCE(p.nome, 'Desconhecido') as paciente, COALESCE(pr.nome, 'Desconhecido') as profissional FROM agendamentos a LEFT JOIN pacientes p ON a.paciente_id=p.id LEFT JOIN profissionais pr ON a.profissional_id=pr.id WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ?"
+    # --- CORREÇÃO: Adicionado p.foto para aparecer no Cockpit ---
+    q = """
+        SELECT a.*, 
+        COALESCE(p.nome, 'Desconhecido') as paciente, 
+        p.foto as paciente_foto,  
+        COALESCE(pr.nome, 'Desconhecido') as profissional 
+        FROM agendamentos a 
+        LEFT JOIN pacientes p ON a.paciente_id=p.id 
+        LEFT JOIN profissionais pr ON a.profissional_id=pr.id 
+        WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ?
+    """
 
     p = [dt_ini, dt_fim]
     if prof:
         q += " AND a.profissional_id=?"
         p.append(prof)
+
+    # Ordena: Status 'Em Atendimento' primeiro, depois hora
     r = [
         dict(x) for x in conn.execute(q + " ORDER BY a.data_hora_inicio", p).fetchall()
     ]
@@ -1091,6 +1398,34 @@ def list_users():
     return jsonify(users)
 
 
+@app.route("/api/prontuario/retificar", methods=["POST"])
+@login_required
+def retificar_pr():
+    d = request.json
+
+    # Validação simples
+    if not d.get("id") or not d.get("justificativa"):
+        return jsonify({"erro": "Dados incompletos"}), 400
+
+    usuario = current_user.username
+    data_hoje = datetime.now().strftime("%d/%m/%Y às %H:%M")
+
+    # Monta o texto com auditoria (Quem e Quando)
+    nota = f"\n[RETIFICAÇÃO feita por {usuario} em {data_hoje}]:\n{d['justificativa']}"
+
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        # Concatena a nova nota ao que já existia (COALESCE garante que não quebre se for vazio)
+        conn.execute(
+            "UPDATE prontuarios SET retificacao = COALESCE(retificacao, '') || ? WHERE id=?",
+            (nota, d["id"]),
+        )
+        conn.commit()
+        conn.close()
+
+    return jsonify({"msg": "Retificação anexada ao prontuário."})
+
+
 @app.route("/api/usuarios/salvar", methods=["POST"])
 @login_required
 def save_user():
@@ -1224,6 +1559,82 @@ def save_fin():
         return jsonify({"erro": f"Erro ao salvar: {str(e)}"}), 500
 
 
+@app.route("/api/upload", methods=["POST"])
+@login_required
+def upload_arquivo():
+    if "file" not in request.files:
+        return jsonify({"erro": "Nenhum arquivo enviado"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"erro": "Nome vazio"}), 400
+
+    if file:
+        ext = os.path.splitext(file.filename)[1]
+        novo_nome = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{int(time.time())}{ext}"
+        caminho = os.path.join(app.config["UPLOAD_FOLDER"], novo_nome)
+        file.save(caminho)
+        return jsonify(
+            {"msg": "Sucesso", "arquivo": novo_nome, "url": f"/uploads/{novo_nome}"}
+        )
+
+
+@app.route("/uploads/<filename>")
+def uploaded_file(filename):
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+
+@app.route("/api/modelos", methods=["GET"])
+@login_required
+def list_modelos():
+    tipo = request.args.get("tipo")
+    conn = db.conectar(read_only=True)
+    if tipo:
+        r = [
+            dict(x)
+            for x in conn.execute(
+                "SELECT * FROM modelos_documentos WHERE tipo=?", (tipo,)
+            ).fetchall()
+        ]
+    else:
+        r = [
+            dict(x) for x in conn.execute("SELECT * FROM modelos_documentos").fetchall()
+        ]
+    conn.close()
+    return jsonify(r)
+
+
+@app.route("/api/modelos/salvar", methods=["POST"])
+@login_required
+def save_modelo():
+    d = request.json
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        if d.get("id"):
+            conn.execute(
+                "UPDATE modelos_documentos SET nome=?, conteudo=? WHERE id=?",
+                (d["nome"], d["conteudo"], d["id"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO modelos_documentos (tipo, nome, conteudo) VALUES (?,?,?)",
+                (d["tipo"], d["nome"], d["conteudo"]),
+            )
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": "Modelo salvo"})
+
+
+@app.route("/api/modelos/deletar/<int:id>", methods=["DELETE"])
+@login_required
+def del_modelo(id):
+    with DB_WRITE_LOCK:
+        conn = db.conectar()
+        conn.execute("DELETE FROM modelos_documentos WHERE id=?", (id,))
+        conn.commit()
+        conn.close()
+    return jsonify({"msg": "Deletado"})
+
+
 @app.route("/api/profissionais/publico")
 def list_prof_publico():
     """Versão pública de profissionais (sem login)"""
@@ -1314,16 +1725,27 @@ def baixa_fin():
 def list_ax(t):
     if t not in ["especialidades", "salas", "procedimentos", "convenios"]:
         return jsonify([])
-    conn = db.conectar(read_only=True)
+
+    # MUDANÇA: Usamos conexão normal (sem read_only) para garantir dados frescos
+    conn = db.conectar()
+
     r = [dict(x) for x in conn.execute(f"SELECT * FROM {t} ORDER BY nome").fetchall()]
     conn.close()
     return jsonify(r)
 
 
-@app.route('/api/auxiliares/<t>/salvar', methods=['POST'])
+@app.route("/api/auxiliares/<t>/salvar", methods=["POST"])
 @login_required
 def save_ax(t):
-    nome = request.json['nome']
+    # Proteção: Se não enviar o nome ou for vazio
+    if not request.json or "nome" not in request.json:
+        return jsonify({"erro": "Nome é obrigatório"}), 400
+
+    nome = request.json["nome"].strip()  # Remove espaços extras
+
+    if not nome:
+        return jsonify({"erro": "O nome não pode estar vazio"}), 400
+
     with DB_WRITE_LOCK:
         conn = db.conectar()
         # TRAVA: Verifica se já existe item com esse nome na tabela
@@ -1331,7 +1753,7 @@ def save_ax(t):
         if check:
             conn.close()
             return jsonify({"erro": "Item já cadastrado!"}), 400
-            
+
         conn.execute(f"INSERT INTO {t} (nome) VALUES (?)", (nome,))
         conn.commit()
         conn.close()
@@ -1352,7 +1774,10 @@ def del_ax(t, id):
 @app.route("/api/convenios", methods=["GET"])
 @login_required
 def list_conv():
-    conn = db.conectar(read_only=True)
+    # CORREÇÃO: Usamos db.conectar() sem read_only=True
+    # Isso garante que ele veja o convênio que acabou de ser salvo
+    conn = db.conectar()
+
     r = [
         dict(x)
         for x in conn.execute("SELECT * FROM convenios ORDER BY nome").fetchall()
@@ -1361,41 +1786,70 @@ def list_conv():
     return jsonify(r)
 
 
-@app.route('/api/convenios/salvar', methods=['POST'])
+@app.route("/api/convenios/salvar", methods=["POST"])
 @login_required
 def save_conv():
     d = request.json
-    v = (d['nome'], d.get('ans'), d.get('cnpj'), d.get('prazo', 30), d.get('tel'), d.get('email'), d.get('site'))
+    # Adicionei d.get('tabela') no final da lista de valores
+    v = (
+        d["nome"],
+        d.get("ans"),
+        d.get("cnpj"),
+        d.get("prazo", 30),
+        d.get("tel"),
+        d.get("email"),
+        d.get("site"),
+        d.get("tabela"),
+    )
 
     with DB_WRITE_LOCK:
         conn = db.conectar()
-        # TRAVA: Verifica duplicidade de Nome ou CNPJ em novos cadastros
-        if not d.get('id'):
-            check = conn.execute("SELECT id FROM convenios WHERE nome=? OR (cnpj IS NOT NULL AND cnpj=?)", (d['nome'], d.get('cnpj'))).fetchone()
-            if check:
-                conn.close()
-                return jsonify({"erro": "Convênio ou CNPJ já cadastrado!"}), 400
 
-        if d.get('id'):
-            conn.execute("UPDATE convenios SET nome=?, registro_ans=?, cnpj=?, prazo_pagamento=?, telefone=?, email=?, site=? WHERE id=?", v + (d['id'],))
+        # Validação de duplicidade (Mantive a lógica inteligente que fizemos antes)
+        if not d.get("id"):
+            check_nome = conn.execute(
+                "SELECT id FROM convenios WHERE nome=?", (d["nome"],)
+            ).fetchone()
+            if check_nome:
+                conn.close()
+                return jsonify({"erro": "Já existe um convênio com esse nome!"}), 400
+
+            if d.get("cnpj") and len(d.get("cnpj")) > 5:
+                check_cnpj = conn.execute(
+                    "SELECT id FROM convenios WHERE cnpj=?", (d.get("cnpj"),)
+                ).fetchone()
+                if check_cnpj:
+                    conn.close()
+                    return jsonify({"erro": "CNPJ já cadastrado!"}), 400
+
+        if d.get("id"):
+            # Adicionei arquivo_tabela=? no UPDATE
+            conn.execute(
+                "UPDATE convenios SET nome=?, registro_ans=?, cnpj=?, prazo_pagamento=?, telefone=?, email=?, site=?, arquivo_tabela=? WHERE id=?",
+                v + (d["id"],),
+            )
         else:
-            conn.execute("INSERT INTO convenios (nome, registro_ans, cnpj, prazo_pagamento, telefone, email, site) VALUES (?,?,?,?,?,?,?)", v)
+            # Adicionei arquivo_tabela e ? no INSERT
+            conn.execute(
+                "INSERT INTO convenios (nome, registro_ans, cnpj, prazo_pagamento, telefone, email, site, arquivo_tabela) VALUES (?,?,?,?,?,?,?,?)",
+                v,
+            )
+
         conn.commit()
         conn.close()
 
     return jsonify({"msg": "Ok"})
 
 
-
-
 @app.route("/api/prontuario/<int:id>", methods=["GET"])
 @login_required
 def list_pr(id):
     conn = db.conectar(read_only=True)
+    # CORREÇÃO: Mudado de JOIN para LEFT JOIN para não perder histórico se médico for excluído
     r = [
         dict(x)
         for x in conn.execute(
-            "SELECT p.*, prof.nome as profissional FROM prontuarios p JOIN profissionais prof ON p.profissional_id=prof.id WHERE p.paciente_id=? ORDER BY p.data_atendimento DESC",
+            "SELECT p.*, COALESCE(prof.nome, 'Profissional Excluído') as profissional FROM prontuarios p LEFT JOIN profissionais prof ON p.profissional_id=prof.id WHERE p.paciente_id=? ORDER BY p.data_atendimento DESC",
             (id,),
         ).fetchall()
     ]
@@ -1410,26 +1864,48 @@ def save_pr():
 
     with DB_WRITE_LOCK:
         conn = db.conectar()
+
+        # Monta a "Evolução Resumo" juntando o SOAP para manter compatibilidade com relatórios antigos
+        evolucao_texto = d.get("evolucao")  # Se vier o texto antigo
+        if not evolucao_texto:
+            # Se for SOAP, monta um texto legível
+            s = d.get("subjetivo", "")
+            o = d.get("objetivo", "")
+            a = d.get("avaliacao", "")
+            p = d.get("plano", "")
+            evolucao_texto = f"S: {s}\nO: {o}\nA: {a}\nP: {p}"
+
         conn.execute(
-            "INSERT INTO prontuarios (paciente_id, profissional_id, data_atendimento, evolucao_clinica, diagnostico, prescricao, exames_solicitados, peso, altura, pressao, temp, saturacao) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT INTO prontuarios 
+            (paciente_id, profissional_id, data_atendimento, evolucao_clinica, diagnostico, prescricao, 
+            exames_solicitados, peso, altura, pressao, temp, saturacao, anexos,
+            queixa_principal, subjetivo, objetivo, avaliacao, plano, conduta, retorno) 
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 d["paciente_id"],
                 d["profissional_id"],
                 datetime.now().strftime("%Y-%m-%d %H:%M"),
-                d["evolucao"],
+                evolucao_texto,  # Salva o resumo na coluna antiga
                 d.get("diagnostico"),
                 d.get("prescricao"),
                 d.get("exames"),
-                # Novos campos vitais
                 d.get("peso"),
                 d.get("altura"),
                 d.get("pressao"),
                 d.get("temp"),
                 d.get("saturacao"),
+                d.get("anexos"),
+                # Novos campos SOAP
+                d.get("queixa_principal"),
+                d.get("subjetivo"),
+                d.get("objetivo"),
+                d.get("avaliacao"),
+                d.get("plano"),
+                d.get("conduta"),
+                d.get("retorno"),
             ),
         )
 
-        # Opcional: Se o médico editou as alergias na tela de atendimento, atualiza no cadastro do paciente
         if d.get("alergias"):
             conn.execute(
                 "UPDATE pacientes SET alergias=? WHERE id=?",
@@ -1448,13 +1924,10 @@ def rel():
     d = request.json
     conn = db.conectar(read_only=True)
     ini, fim = d["inicio"], d["fim"]
-
-    # Prepara resposta padrão
     response = {"lista": [], "resumo": {}}
 
     try:
         if d["tipo"] == "agendamentos":
-            # Lista detalhada
             response["lista"] = [
                 dict(r)
                 for r in conn.execute(
@@ -1462,18 +1935,10 @@ def rel():
                     (ini, fim),
                 ).fetchall()
             ]
-
-            # Resumo para Gráficos
             stats = conn.execute(
-                """
-                SELECT status, COUNT(*) as qtd, SUM(valor) as total 
-                FROM agendamentos 
-                WHERE DATE(data_hora_inicio) BETWEEN ? AND ? 
-                GROUP BY status
-            """,
+                "SELECT status, COUNT(*) as qtd, SUM(valor) as total FROM agendamentos WHERE DATE(data_hora_inicio) BETWEEN ? AND ? GROUP BY status",
                 (ini, fim),
             ).fetchall()
-
             response["resumo"] = {
                 "labels": [s["status"] for s in stats],
                 "data": [s["qtd"] for s in stats],
@@ -1482,37 +1947,23 @@ def rel():
             }
 
         elif d["tipo"] == "financeiro":
-            # Receitas
             r_in = conn.execute(
                 "SELECT data_vencimento as data, descricao, categoria, 'Receita' as tipo, valor_total as valor, forma_pagamento FROM contas_receber WHERE data_vencimento BETWEEN ? AND ? AND status='Pago'",
                 (ini, fim),
             ).fetchall()
-            # Despesas
             r_out = conn.execute(
                 "SELECT data_vencimento as data, descricao, categoria, 'Despesa' as tipo, valor_total as valor, forma_pagamento FROM contas_pagar WHERE data_vencimento BETWEEN ? AND ? AND status='Pago'",
                 (ini, fim),
             ).fetchall()
-
-            # Lista Unificada
             full_list = [dict(x) for x in r_in] + [dict(x) for x in r_out]
             full_list.sort(key=lambda x: x["data"])
             response["lista"] = full_list
-
-            # Cálculos de Totais
             total_rec = sum([x["valor"] for x in full_list if x["tipo"] == "Receita"])
             total_desp = sum([x["valor"] for x in full_list if x["tipo"] == "Despesa"])
-
-            # Agrupamento por Categoria (Top 5 Receitas)
             cats = conn.execute(
-                """
-                SELECT categoria, SUM(valor_total) as total 
-                FROM contas_receber 
-                WHERE status='Pago' AND data_vencimento BETWEEN ? AND ? 
-                GROUP BY categoria ORDER BY total DESC LIMIT 5
-            """,
+                "SELECT categoria, SUM(valor_total) as total FROM contas_receber WHERE status='Pago' AND data_vencimento BETWEEN ? AND ? GROUP BY categoria ORDER BY total DESC LIMIT 5",
                 (ini, fim),
             ).fetchall()
-
             response["resumo"] = {
                 "receita": total_rec,
                 "despesa": total_desp,
@@ -1522,60 +1973,77 @@ def rel():
             }
 
         elif d["tipo"] == "profissionais":
-            # Performance + Faturamento Estimado
             response["lista"] = [
                 dict(r)
                 for r in conn.execute(
-                    """
-                SELECT pr.nome as profissional, 
-                       COUNT(a.id) as atendimentos, 
-                       SUM(CASE WHEN a.status='Finalizado' THEN 1 ELSE 0 END) as finalizados,
-                       SUM(CASE WHEN a.status='Finalizado' THEN a.valor ELSE 0 END) as faturamento_est
-                FROM agendamentos a 
-                JOIN profissionais pr ON a.profissional_id=pr.id 
-                WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ? 
-                GROUP BY pr.nome ORDER BY faturamento_est DESC
-            """,
+                    "SELECT pr.nome as profissional, COUNT(a.id) as atendimentos, SUM(CASE WHEN a.status='Finalizado' THEN 1 ELSE 0 END) as finalizados, SUM(CASE WHEN a.status='Finalizado' THEN a.valor ELSE 0 END) as faturamento_est FROM agendamentos a JOIN profissionais pr ON a.profissional_id=pr.id WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ? GROUP BY pr.nome ORDER BY faturamento_est DESC",
                     (ini, fim),
                 ).fetchall()
             ]
-
-            # Dados para gráfico de barras
             response["resumo"] = {
                 "labels": [x["profissional"] for x in response["lista"]],
                 "data_atend": [x["atendimentos"] for x in response["lista"]],
                 "data_fat": [x["faturamento_est"] or 0 for x in response["lista"]],
             }
 
+        # --- NOVO: REPASSE MÉDICO ---
+        elif d["tipo"] == "repasse":
+            rows = conn.execute(
+                """
+                SELECT pr.nome, pr.comissao, COUNT(a.id) as qtd_atendimentos, SUM(a.valor) as total_produzido, (SUM(a.valor) * (pr.comissao / 100.0)) as valor_repasse
+                FROM agendamentos a JOIN profissionais pr ON a.profissional_id = pr.id
+                WHERE a.status = 'Finalizado' AND DATE(a.data_hora_inicio) BETWEEN ? AND ?
+                GROUP BY pr.id
+            """,
+                (ini, fim),
+            ).fetchall()
+            response["lista"] = [dict(r) for r in rows]
+            total_prod = sum([r["total_produzido"] or 0 for r in response["lista"]])
+            total_rep = sum([r["valor_repasse"] or 0 for r in response["lista"]])
+            response["resumo"] = {
+                "total_produzido": total_prod,
+                "total_repasse": total_rep,
+                "lucro_bruto": total_prod - total_rep,
+            }
+
+        # --- NOVO: FECHAMENTO DE CAIXA ---
+        elif d["tipo"] == "fechamento":
+            pagamentos = conn.execute(
+                "SELECT forma_pagamento, SUM(valor_total) as total FROM contas_receber WHERE status='Pago' AND data_pagamento BETWEEN ? AND ? GROUP BY forma_pagamento",
+                (ini, fim),
+            ).fetchall()
+            saidas = (
+                conn.execute(
+                    "SELECT SUM(valor_pago) FROM contas_pagar WHERE data_pagamento BETWEEN ? AND ?",
+                    (ini, fim),
+                ).fetchone()[0]
+                or 0
+            )
+            response["lista"] = [dict(r) for r in pagamentos]
+            total_entradas = sum([r["total"] for r in pagamentos])
+            response["resumo"] = {
+                "total_entradas": total_entradas,
+                "total_saidas": saidas,
+                "saldo_periodo": total_entradas - saidas,
+            }
+
         elif d["tipo"] == "pacientes":
-            # Lista simples
             response["lista"] = [
                 dict(r)
                 for r in conn.execute(
                     "SELECT nome, cpf, telefone_principal, email, created_at as cadastro FROM pacientes ORDER BY nome"
                 ).fetchall()
             ]
-
-            # Gráfico de Novos vs Antigos (Exemplo simples: Cadastro por mês)
-            # Simplificado: Retorna apenas total
             response["resumo"] = {"total": len(response["lista"])}
 
         elif d["tipo"] == "convenios":
             response["lista"] = [
                 dict(r)
                 for r in conn.execute(
-                    """
-                SELECT c.nome as convenio, COUNT(a.id) as atendimentos 
-                FROM agendamentos a 
-                JOIN pacientes p ON a.paciente_id=p.id 
-                JOIN convenios c ON p.convenio_id=c.id 
-                WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ? 
-                GROUP BY c.nome ORDER BY atendimentos DESC
-            """,
+                    "SELECT c.nome as convenio, COUNT(a.id) as atendimentos FROM agendamentos a JOIN pacientes p ON a.paciente_id=p.id JOIN convenios c ON p.convenio_id=c.id WHERE DATE(a.data_hora_inicio) BETWEEN ? AND ? GROUP BY c.nome ORDER BY atendimentos DESC",
                     (ini, fim),
                 ).fetchall()
             ]
-
             response["resumo"] = {
                 "labels": [x["convenio"] for x in response["lista"]],
                 "data": [x["atendimentos"] for x in response["lista"]],
@@ -1593,9 +2061,9 @@ def rel():
 
     except Exception as e:
         print("Erro Rel:", e)
+        traceback.print_exc()
     finally:
         conn.close()
-
     return jsonify(response)
 
 
@@ -1770,72 +2238,59 @@ def chamar_painel():
 @login_required
 def exportar(tipo):
     conn = db.conectar(read_only=True)
-    # Usa BOM (\ufeff) para acentos e delimiter=";" para colunas no Excel BR
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
-
     cursor = None
-
     try:
         if tipo == "financeiro":
-            # Pega Receitas e Despesas (Contas a Pagar e Receber)
             cursor = conn.execute(
-                """
-                SELECT data_vencimento, descricao, categoria, valor_total, status, 'Receita' as tipo 
-                FROM contas_receber 
-                UNION ALL 
-                SELECT data_vencimento, descricao, categoria, valor_total, status, 'Despesa' as tipo 
-                FROM contas_pagar 
-                ORDER BY data_vencimento
-            """
+                "SELECT data_vencimento, descricao, categoria, valor_total, status, 'Receita' as tipo FROM contas_receber UNION ALL SELECT data_vencimento, descricao, categoria, valor_total, status, 'Despesa' as tipo FROM contas_pagar ORDER BY data_vencimento"
             )
             writer.writerow(
                 ["Data", "Descrição", "Categoria", "Valor", "Status", "Tipo"]
             )
-
         elif tipo == "pacientes":
             cursor = conn.execute(
                 "SELECT nome, cpf, telefone_principal, email, endereco FROM pacientes"
             )
             writer.writerow(["Nome", "CPF", "Telefone", "Email", "Endereço"])
-
         elif tipo == "agendamentos":
             cursor = conn.execute(
-                """
-                SELECT a.data_hora_inicio, p.nome, pr.nome, a.status, a.valor 
-                FROM agendamentos a 
-                JOIN pacientes p ON a.paciente_id=p.id 
-                JOIN profissionais pr ON a.profissional_id=pr.id
-                ORDER BY a.data_hora_inicio DESC
-            """
+                "SELECT a.data_hora_inicio, p.nome, pr.nome, a.status, a.valor FROM agendamentos a JOIN pacientes p ON a.paciente_id=p.id JOIN profissionais pr ON a.profissional_id=pr.id ORDER BY a.data_hora_inicio DESC"
             )
             writer.writerow(
                 ["Data/Hora", "Paciente", "Profissional", "Status", "Valor"]
             )
-
         elif tipo == "profissionais":
             cursor = conn.execute(
                 "SELECT nome, crm, telefone, email, especialidade_id FROM profissionais"
             )
             writer.writerow(["Nome", "CRM", "Telefone", "Email", "Especialidade (ID)"])
-
-        else:
-            return (
-                jsonify({"erro": "Tipo de exportação não suportado ou inválido"}),
-                400,
+        # NOVO: EXPORTAÇÃO DE REPASSE
+        elif tipo == "repasse_geral":
+            cursor = conn.execute(
+                "SELECT pr.nome, pr.comissao, COUNT(a.id), SUM(a.valor), (SUM(a.valor)*(pr.comissao/100.0)) FROM agendamentos a JOIN profissionais pr ON a.profissional_id = pr.id WHERE a.status='Finalizado' GROUP BY pr.id"
             )
+            writer.writerow(
+                [
+                    "Profissional",
+                    "Comissao %",
+                    "Qtd Atendimentos",
+                    "Total Produzido",
+                    "Valor Repasse",
+                ]
+            )
+        else:
+            return jsonify({"erro": "Tipo inválido"}), 400
 
         if cursor:
-            # Escreve as linhas do banco no CSV
             writer.writerows(cursor.fetchall())
-
     except Exception as e:
         print(f"Erro exportação: {e}")
-        return jsonify({"erro": "Falha ao exportar dados"}), 500
+        return jsonify({"erro": "Falha ao exportar"}), 500
     finally:
         conn.close()
 
-    # Retorna o arquivo com codificação UTF-8 com BOM (importante para Excel)
     return Response(
         "\ufeff" + output.getvalue(),
         mimetype="text/csv",
@@ -1863,32 +2318,80 @@ class Api:
         )
         return "Nova janela criada"
 
-    def salvar_arquivo(self, nome_arquivo, conteudo):
+    def salvar_pdf(self, nome_arquivo, dados_base64):
         import webview
+        import base64
+        import os
 
-        # 🔥 Abre a janela nativa do Windows para escolher onde salvar
+        # Abre a janela nativa do Windows para escolher onde salvar
         caminho_escolhido = webview.windows[0].create_file_dialog(
-            webview.SAVE_DIALOG, directory="", save_filename=nome_arquivo
+            webview.SAVE_DIALOG,
+            save_filename=nome_arquivo,
+            file_types=("Documentos PDF (*.pdf)", "Todos os arquivos (*.*)"),
         )
 
-        # Se o usuário escolheu uma pasta e clicou em Salvar
         if caminho_escolhido:
             try:
                 # O PyWebview retorna uma lista, pegamos o primeiro item
-                caminho_final = caminho_escolhido
-                if isinstance(caminho_escolhido, (tuple, list)):
-                    caminho_final = caminho_escolhido[0]
+                caminho_final = (
+                    caminho_escolhido[0]
+                    if isinstance(caminho_escolhido, (tuple, list))
+                    else caminho_escolhido
+                )
 
-                # Grava o arquivo no local escolhido
-                # 'utf-8-sig' é importante para o Excel abrir com acentos corretos no Windows
-                with open(caminho_final, "w", encoding="utf-8-sig", newline="") as f:
-                    f.write(conteudo)
+                # Decodifica o Base64 que veio do Javascript e salva como binário (wb)
+                dados = base64.b64decode(dados_base64)
+                with open(caminho_final, "wb") as f:
+                    f.write(dados)
 
-                return "✅ Arquivo salvo com sucesso!"
+                # Tenta abrir o PDF automaticamente para o usuário ver
+                try:
+                    os.startfile(caminho_final)
+                except:
+                    pass
+
+                return "✅ Recibo salvo e aberto com sucesso!"
             except Exception as e:
                 return f"❌ Erro ao salvar: {str(e)}"
 
-        # Se o usuário cancelou a janela
+        return "Cancelado"
+
+    def salvar_arquivo(self, nome_arquivo, conteudo):
+        """
+        Função que faltava para salvar o CSV/Excel
+        """
+        import webview
+        import os
+
+        # Janela de salvar arquivo
+        caminho_escolhido = webview.windows[0].create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=nome_arquivo,
+            file_types=("Planilha CSV (*.csv)", "Todos os arquivos (*.*)"),
+        )
+
+        if caminho_escolhido:
+            try:
+                caminho_final = (
+                    caminho_escolhido[0]
+                    if isinstance(caminho_escolhido, (tuple, list))
+                    else caminho_escolhido
+                )
+
+                # Salva o texto (utf-8-sig ajuda o Excel a ler acentos corretamente)
+                with open(caminho_final, "w", encoding="utf-8-sig") as f:
+                    f.write(conteudo)
+
+                # Tenta abrir o arquivo automaticamente
+                try:
+                    os.startfile(caminho_final)
+                except:
+                    pass
+
+                return "✅ Relatório exportado com sucesso!"
+            except Exception as e:
+                return f"❌ Erro ao salvar: {str(e)}"
+
         return "Cancelado"
 
 
@@ -1933,6 +2436,74 @@ def cal_resumo_qtd():
         )
 
     return jsonify(eventos)
+
+
+@app.route("/api/recibo/<int:ag_id>")
+@login_required
+def gerar_recibo_pdf(ag_id):
+    conn = db.conectar(read_only=True)
+    # Busca dados do agendamento, paciente e profissional
+    query = """
+        SELECT a.*, p.nome as paciente, p.cpf, pr.nome as profissional, pr.crm 
+        FROM agendamentos a 
+        JOIN pacientes p ON a.paciente_id=p.id 
+        JOIN profissionais pr ON a.profissional_id=pr.id 
+        WHERE a.id = ?
+    """
+    dados = conn.execute(query, (ag_id,)).fetchone()
+    conf = conn.execute("SELECT * FROM configuracoes").fetchone()
+    conn.close()
+
+    if not dados:
+        return "Agendamento não encontrado", 404
+
+    # Cria o PDF na memória
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+
+    # Cabeçalho
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, 800, conf["nome_clinica"] if conf else "Minha Clínica")
+    c.setFont("Helvetica", 10)
+    c.drawString(50, 785, conf["endereco"] if conf else "")
+    c.drawString(50, 770, f"Tel: {conf['telefone'] if conf else ''}")
+
+    c.line(50, 760, 550, 760)
+
+    # Título
+    c.setFont("Helvetica-Bold", 20)
+    c.drawCentredString(300, 720, "RECIBO")
+
+    # Corpo
+    valor = f"R$ {dados['valor']:.2f}".replace(".", ",")
+    texto_valor = f"Recebemos de {dados['paciente']} (CPF: {dados['cpf'] or 'N/I'})"
+    texto_referente = f"A importância de {valor} referente a consulta médica."
+
+    c.setFont("Helvetica", 12)
+    c.drawString(50, 650, texto_valor)
+    c.drawString(50, 630, texto_referente)
+    c.drawString(
+        50,
+        610,
+        f"Data do atendimento: {datetime.strptime(dados['data_hora_inicio'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')}",
+    )
+    c.drawString(
+        50, 590, f"Profissional: {dados['profissional']} - CRM: {dados['crm']}"
+    )
+
+    # Data e Assinatura
+    c.drawString(300, 500, f"Data da emissão: {datetime.now().strftime('%d/%m/%Y')}")
+    c.line(300, 450, 500, 450)
+    c.drawString(300, 435, "Assinatura / Carimbo")
+
+    c.save()
+    buffer.seek(0)
+
+    return Response(
+        buffer,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=recibo_{ag_id}.pdf"},
+    )
 
 
 def auto_refresh_cache():
